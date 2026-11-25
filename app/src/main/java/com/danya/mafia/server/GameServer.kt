@@ -41,6 +41,10 @@ class GameServer(
                     handleState(session)
                 session.uri == "/api/action" ->
                     handleAction(session)
+                session.uri == "/api/chat" ->
+                    handleChat(session)
+                session.uri == "/api/activity" ->
+                    handleActivity(session)
                 else -> cors(newFixedLengthResponse(
                     Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found"
                 ))
@@ -133,11 +137,57 @@ class GameServer(
         }))
     }
 
+    private fun handleChat(session: IHTTPSession): Response {
+        if (session.method != Method.POST) return badRequest("Нужен POST")
+        val body = readJson(session) ?: return badRequest("Пустой запрос")
+        val result = engine.sendChat(
+            body.optString("playerId", ""),
+            body.optString("token", ""),
+            body.optString("text", "")
+        )
+        return cors(json(JSONObject().apply {
+            put("ok", result.ok)
+            if (!result.ok) put("error", result.error ?: "Не удалось")
+        }))
+    }
+
+    private fun handleActivity(session: IHTTPSession): Response {
+        if (session.method != Method.POST) return badRequest("Нужен POST")
+        val body = readJson(session) ?: return badRequest("Пустой запрос")
+        val result = engine.recordActivity(
+            body.optString("playerId", ""),
+            body.optString("token", ""),
+            body.optString("screen", ""),
+            body.optString("detail", ""),
+            body.optInt("scroll", 0)
+        )
+        return cors(json(JSONObject().apply {
+            put("ok", result.ok)
+            if (!result.ok) put("error", result.error ?: "Не удалось")
+        }))
+    }
+
+    /**
+     * Читаем тело запроса сами, в UTF-8.
+     * Встроенный parseBody() у NanoHTTPD декодирует тело как ASCII,
+     * если в Content-Type не указан charset, — из-за этого русские имена
+     * превращались в вопросительные знаки.
+     */
     private fun readJson(session: IHTTPSession): JSONObject? {
         return try {
-            val files = HashMap<String, String>()
-            session.parseBody(files)
-            val raw = files["postData"] ?: ""
+            val length = session.headers["content-length"]?.toIntOrNull() ?: 0
+            val raw = if (length > 0) {
+                val bytes = ByteArray(length)
+                var off = 0
+                while (off < length) {
+                    val n = session.inputStream.read(bytes, off, length - off)
+                    if (n <= 0) break
+                    off += n
+                }
+                String(bytes, 0, off, Charsets.UTF_8)
+            } else {
+                session.inputStream.readBytes().toString(Charsets.UTF_8)
+            }
             if (raw.isBlank()) null else JSONObject(raw)
         } catch (_: Exception) {
             null

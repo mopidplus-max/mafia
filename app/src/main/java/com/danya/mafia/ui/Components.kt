@@ -217,6 +217,13 @@ fun PlayerRow(
                         }
                     }
                 }
+                if (player.guardian) {
+                    Text(
+                        "👼 Ангел-Хранитель",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
                 if (!player.alive) {
                     Text(
                         "выбыл",

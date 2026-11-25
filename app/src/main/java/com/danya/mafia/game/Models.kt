@@ -7,7 +7,8 @@ data class RoomConfig(
     val name: String,
     val password: String? = null,
     val allowedRoles: Set<String> = Role.defaultAllowed,
-    val maxPlayers: Int = 0
+    val maxPlayers: Int = 0,
+    val autoHost: Boolean = true
 )
 
 data class RoomInfo(
@@ -47,7 +48,8 @@ data class PlayerView(
     val roleDescription: String? = null,
     val roleTeam: String? = null,
     val isYou: Boolean = false,
-    val left: Boolean = false
+    val left: Boolean = false,
+    val guardian: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -56,6 +58,7 @@ data class PlayerView(
         put("alive", alive)
         put("isYou", isYou)
         put("left", left)
+        put("guardian", guardian)
         if (roleId != null) put("roleId", roleId)
         if (roleTitle != null) put("roleTitle", roleTitle)
         if (roleIcon != null) put("roleIcon", roleIcon)
@@ -75,7 +78,8 @@ data class PlayerView(
             roleDescription = o.nullableString("roleDescription"),
             roleTeam = o.nullableString("roleTeam"),
             isYou = o.optBoolean("isYou"),
-            left = o.optBoolean("left")
+            left = o.optBoolean("left"),
+            guardian = o.optBoolean("guardian")
         )
     }
 }
@@ -166,6 +170,54 @@ data class VoteStatus(
     }
 }
 
+data class ChatMessage(
+    val id: Long,
+    val authorId: String,
+    val authorName: String,
+    val text: String,
+    val at: Long,
+    val dead: Boolean = false
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("id", id)
+        put("authorId", authorId)
+        put("authorName", authorName)
+        put("text", text)
+        put("at", at)
+        put("dead", dead)
+    }
+
+    companion object {
+        fun fromJson(o: JSONObject) = ChatMessage(
+            id = o.optLong("id"),
+            authorId = o.optString("authorId"),
+            authorName = o.optString("authorName"),
+            text = o.optString("text"),
+            at = o.optLong("at"),
+            dead = o.optBoolean("dead")
+        )
+    }
+}
+
+/** Что сейчас делает игрок на сайте — для экрана ведущего. */
+data class PlayerActivity(
+    val playerId: String,
+    val playerName: String,
+    val screen: String,
+    val detail: String,
+    val scroll: Int,
+    val at: Long
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("playerId", playerId)
+        put("playerName", playerName)
+        put("screen", screen)
+        put("detail", detail)
+        put("scroll", scroll)
+        put("at", at)
+    }
+}
+
 data class ClientState(
     val roomName: String,
     val phase: String,
@@ -186,7 +238,8 @@ data class ClientState(
     val winner: String? = null,
     val rolesRevealed: Boolean = false,
     val nightRoleTitle: String? = null,
-    val nightRoleIcon: String? = null
+    val nightRoleIcon: String? = null,
+    val chat: List<ChatMessage> = emptyList()
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("roomName", roomName)
@@ -200,6 +253,7 @@ data class ClientState(
         put("serverNow", serverNow)
         put("message", message)
         put("rolesRevealed", rolesRevealed)
+        put("chat", JSONArray().apply { chat.forEach { put(it.toJson()) } })
         if (startAt != null) put("startAt", startAt)
         if (phaseEndsAt != null) put("phaseEndsAt", phaseEndsAt)
         if (prompt != null) put("prompt", prompt.toJson())
@@ -219,6 +273,9 @@ data class ClientState(
             val events = mutableListOf<String>()
             val eArr = o.optJSONArray("events") ?: JSONArray()
             for (i in 0 until eArr.length()) events.add(eArr.getString(i))
+            val chat = mutableListOf<ChatMessage>()
+            val cArr = o.optJSONArray("chat") ?: JSONArray()
+            for (i in 0 until cArr.length()) chat.add(ChatMessage.fromJson(cArr.getJSONObject(i)))
             return ClientState(
                 roomName = o.optString("roomName"),
                 phase = o.optString("phase", "lobby"),
@@ -239,7 +296,8 @@ data class ClientState(
                 winner = o.nullableString("winner"),
                 rolesRevealed = o.optBoolean("rolesRevealed"),
                 nightRoleTitle = o.nullableString("nightRoleTitle"),
-                nightRoleIcon = o.nullableString("nightRoleIcon")
+                nightRoleIcon = o.nullableString("nightRoleIcon"),
+                chat = chat
             )
         }
     }
@@ -269,7 +327,12 @@ data class HostSnapshot(
     val canStart: Boolean = false,
     val canRestart: Boolean = false,
     val allowedRoles: List<String> = emptyList(),
-    val minPlayers: Int = 4
+    val minPlayers: Int = 4,
+    val autoHost: Boolean = false,
+    val chat: List<ChatMessage> = emptyList(),
+    val activity: List<PlayerActivity> = emptyList(),
+    val pistolHolder: String? = null,
+    val guardianNames: List<String> = emptyList()
 )
 
 data class JoinResponse(

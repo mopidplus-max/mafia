@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
 import kotlin.math.max
+import kotlin.random.Random
 
 data class JoinResult(
     val ok: Boolean,
@@ -77,6 +78,10 @@ class GameEngine(
         private const val INFO_MS = 5_000L
         private const val DISCUSSION_MS = 60_000L
         private const val VOTE_MS = 30_000L
+        private const val AUTO_INTRO_MS = 3_000L
+        private const val AUTO_RESULT_MS = 6_000L
+        private const val PISTOL_CHANCE = 0.20
+        private const val GUARDIAN_CHANCE = 0.40
     }
 
     private val lock = Any()
@@ -95,6 +100,23 @@ class GameEngine(
     private val log = mutableListOf<String>()
     private val privateMessages = mutableMapOf<String, String>()
 
+    // ── Чат и экраны игроков ──
+    private val chat = mutableListOf<ChatMessage>()
+    private var chatSeq = 0L
+    private val activity = mutableMapOf<String, PlayerActivity>()
+
+    // ── Пистолет и Ангел-Хранитель ──
+    private var pistolHolderId: String? = null
+    private var pistolUsed = false
+    private var pistolSnoozedDay = 0
+    private val guardians = mutableSetOf<String>()
+    private val guardedIds = mutableSetOf<String>()
+
+    // ── Автоведущий ──
+    private var autoAdvanceAt: Long? = null
+    var autoHostEnabled: Boolean = config.autoHost
+        private set
+
     // ── Ночь ──
     private val nightQueue = mutableListOf<Role>()
     private var step: NightStep? = null
@@ -104,7 +126,7 @@ class GameEngine(
     private var beautyTargetId: String? = null
     private var doctorTargetId: String? = null
     private var commissionerCheckedId: String? = null
-    private var angelReviveId: String? = null
+    private var martyrReviveId: String? = null
     private var pendingMafiaTargetId: String? = null
     private var pendingManiacTargetId: String? = null
     private var witchEvent: String? = null
@@ -236,6 +258,24 @@ class GameEngine(
         witchUsed = false
         sniperUsed = false
         step = null
+        guardians.clear()
+        guardedIds.clear()
+        chat.clear()
+        activity.clear()
+        pistolUsed = false
+        pistolHolderId = null
+        autoAdvanceAt = null
+        if (Random.nextDouble() < PISTOL_CHANCE) {
+            val holder = players
+                .filter { it.role?.team == Team.PEACEFUL }
+                .randomOrNull()
+            if (holder != null) {
+                pistolHolderId = holder.id
+                privateMessages[holder.id] =
+                    "🔫 Вам подкинули пистолет. Один раз за игру можно убить любого игрока днём."
+                addLog("Пистолет подкинули: ${holder.name}")
+            }
+        }
         events = mutableListOf(
             "🃏 Роли розданы",
             "Игра начинается через 10 секунд..."
@@ -248,6 +288,13 @@ class GameEngine(
 
     fun advance(): ActionResult = synchronized(lock) {
         val now = System.currentTimeMillis()
+        advanceLocked(now)
+        emit(now)
+        ActionResult(true)
+    }
+
+    private fun advanceLocked(now: Long) {
+        autoAdvanceAt = null
         when (phase) {
             Phase.STARTING -> beginNightIntro(now)
             Phase.NIGHT_INTRO -> startNight(now)
@@ -276,6 +323,19 @@ class GameEngine(
             }
             Phase.LOBBY, Phase.GAME_OVER -> Unit
         }
+    }
+
+    fun setAutoHost(enabled: Boolean): ActionResult = synchronized(lock) {
+        autoHostEnabled = enabled
+        val now = System.currentTimeMillis()
+        if (!enabled) {
+            autoAdvanceAt = null
+        } else if (phase == Phase.NIGHT_INTRO) {
+            autoAdvanceAt = now + AUTO_INTRO_MS
+        } else if (phase == Phase.NIGHT_RESULTS || phase == Phase.VOTE_RESULTS) {
+            autoAdvanceAt = now + AUTO_RESULT_MS
+        }
+        addLog(if (enabled) "Автоведущий включён" else "Автоведущий выключен")
         emit(now)
         ActionResult(true)
     }
@@ -301,6 +361,7 @@ class GameEngine(
             }
             "vote" -> submitVote(p, targetId, now)
             "sniper" -> submitSniper(p, targetId, now)
+            "pistol" -> submitPistol(p, targetId, now)
             "skip" -> submitSkip(p, now)
             else -> ActionResult(false, "Неизвестное действие")
         }
@@ -365,10 +426,12 @@ class GameEngine(
         sniperUsed = true
         if (target.role?.team == Team.MAFIA) {
             target.alive = false
+            maybeGuardian(target)
             events += "🎯 Снайпер выстрелил в ${target.name}. Это была мафия! Она погибла."
             addLog("Снайпер убил ${target.name} (${target.role?.title})")
         } else {
             sniper.alive = false
+            maybeGuardian(sniper)
             events += "🎯 Снайпер выстрелил в ${target.name}, но попал в мирного. Снайпер погиб."
             addLog("Снайпер промахнулся в ${target.name} и погиб")
         }
@@ -376,6 +439,34 @@ class GameEngine(
         if (winner != null) {
             gameOver()
         }
+        emit(now)
+        return ActionResult(true)
+    }
+
+    private fun submitPistol(p: GamePlayer, targetId: String?, now: Long): ActionResult {
+        if (phase != Phase.DAY_DISCUSSION) return ActionResult(false, "Сейчас нельзя стрелять")
+        if (pistolHolderId != p.id) return ActionResult(false, "У вас нет пистолета")
+        if (pistolUsed) return ActionResult(false, "Пистолет уже использован")
+
+        if (targetId == null) {
+            pistolSnoozedDay = dayNum
+            addLog("${p.name} пока не использует пистолет")
+            emit(now)
+            return ActionResult(true)
+        }
+
+        val target = playerById(targetId) ?: return ActionResult(false, "Игрок не найден")
+        if (!target.alive) return ActionResult(false, "Этот игрок уже выбыл")
+        if (target.id == p.id) return ActionResult(false, "Нельзя стрелять в себя")
+
+        pistolUsed = true
+        target.alive = false
+        maybeGuardian(target)
+        events += "🔫 ${p.name} выстрелил в ${target.name}. " +
+            "Роль: ${target.role?.icon ?: ""} ${target.role?.title ?: "?"}."
+        addLog("${p.name} застрелил ${target.name} (${target.role?.title})")
+        winner = checkWinner()
+        if (winner != null) gameOver()
         emit(now)
         return ActionResult(true)
     }
@@ -391,7 +482,13 @@ class GameEngine(
                 if (currentVoter()?.id == p.id) submitVote(p, null, now)
                 else ActionResult(false, "Сейчас голосует другой игрок")
             }
-            Phase.DAY_DISCUSSION -> ActionResult(true)
+            Phase.DAY_DISCUSSION -> {
+                if (pistolHolderId == p.id && !pistolUsed) {
+                    pistolSnoozedDay = dayNum
+                    emit(now)
+                }
+                ActionResult(true)
+            }
             else -> ActionResult(false, "Сейчас нельзя пропустить")
         }
     }
@@ -402,6 +499,11 @@ class GameEngine(
 
     /** Возвращает true, если состояние изменилось. */
     private fun tick(now: Long): Boolean {
+        val autoAt = autoAdvanceAt
+        if (autoAt != null && now >= autoAt) {
+            advanceLocked(now)
+            return true
+        }
         when (phase) {
             Phase.STARTING -> {
                 val at = startAt
@@ -465,7 +567,7 @@ class GameEngine(
         startAt = null
         phaseEndsAt = null
         step = null
-        privateMessages.clear()
+        autoAdvanceAt = if (autoHostEnabled) now + AUTO_INTRO_MS else null
         events = mutableListOf("🌙 Ночь $nightNum", "Город засыпает...")
         addLog("Ночь $nightNum: город засыпает")
     }
@@ -480,10 +582,11 @@ class GameEngine(
         beautyTargetId = null
         doctorTargetId = null
         commissionerCheckedId = null
-        angelReviveId = null
+        martyrReviveId = null
         pendingMafiaTargetId = null
         pendingManiacTargetId = null
         witchEvent = null
+        guardedIds.clear()
         nightQueue.clear()
 
         if (players.any { it.alive && it.role == Role.DRUGGIE }) nightQueue += Role.DRUGGIE
@@ -491,7 +594,8 @@ class GameEngine(
         if (players.any { it.alive && it.role?.isMafia == true }) nightQueue += Role.MAFIA
         if (players.any { it.alive && it.role == Role.DOCTOR }) nightQueue += Role.DOCTOR
         if (players.any { it.alive && it.role == Role.COMMISSIONER }) nightQueue += Role.COMMISSIONER
-        if (players.any { it.alive && it.role == Role.ANGEL }) nightQueue += Role.ANGEL
+        if (players.any { it.alive && it.role == Role.MARTYR }) nightQueue += Role.MARTYR
+        if (guardians.isNotEmpty()) nightQueue += Role.GUARDIAN
         if (!witchUsed && players.any { it.alive && it.role == Role.WITCH }) nightQueue += Role.WITCH
         if (players.any { it.alive && it.role == Role.MANIAC }) nightQueue += Role.MANIAC
 
@@ -664,19 +768,15 @@ class GameEngine(
                     )
                 }
             }
-            Role.ANGEL -> {
-                val actor = singleAlive(Role.ANGEL) ?: return null
-                val dead = players.filter { !it.alive }
+            Role.MARTYR -> {
+                val actor = singleAlive(Role.MARTYR) ?: return null
+                val dead = players.filter { !it.alive && it.id !in guardians }
                 when {
                     actor.id in drugBlocked || actor.id in beautyBlocked ->
                         blockedStep(role, actor, now)
-                    nightNum < 2 -> infoStep(
-                        role, actor, "😇 Просыпается Ангел",
-                        "Воскрешение доступно только со 2-й ночи. Ангел ждёт.", now
-                    )
                     dead.isEmpty() -> infoStep(
-                        role, actor, "😇 Просыпается Ангел",
-                        "Погибших нет — воскрешать некого.", now
+                        role, actor, "🕯️ Просыпается Смертник",
+                        "Погибших нет — жертвовать жизнью пока не ради кого.", now
                     )
                     else -> actionStep(
                         role = role,
@@ -685,15 +785,35 @@ class GameEngine(
                         infoIds = setOf(actor.id),
                         blocked = emptySet(),
                         targets = dead,
-                        title = "😇 Просыпается Ангел",
-                        body = "Ангел может воскресить одного погибшего игрока.",
-                        prompt = "Кого воскресить?",
+                        title = "🕯️ Просыпается Смертник",
+                        body = "Смертник может отдать свою жизнь, чтобы вернуть одного погибшего. " +
+                            "После этого он погибнет.",
+                        prompt = "Кого вернуть в игру ценой своей жизни?",
                         canSkip = true,
                         minTargets = 1,
                         maxTargets = 1,
                         now = now
                     )
                 }
+            }
+            Role.GUARDIAN -> {
+                val actors = guardians.mapNotNull(::playerById)
+                if (actors.isEmpty()) return null
+                actionStep(
+                    role = role,
+                    kind = StepKind.ACTION,
+                    actors = actors,
+                    infoIds = actors.map { it.id }.toSet(),
+                    blocked = emptySet(),
+                    targets = alivePlayers(),
+                    title = "👼 Просыпаются Ангелы-Хранители",
+                    body = "Каждый Ангел-Хранитель может защитить одного игрока этой ночью.",
+                    prompt = "Кого защитить этой ночью?",
+                    canSkip = true,
+                    minTargets = 1,
+                    maxTargets = 1,
+                    now = now
+                )
             }
             Role.WITCH -> {
                 if (witchUsed) return null
@@ -860,11 +980,20 @@ class GameEngine(
                     addLog("Комиссар проверил ${target.name}: ${if (isMafia) "мафия" else "мирный"}")
                 }
             }
-            Role.ANGEL -> {
+            Role.MARTYR -> {
                 val target = s.submissions.values.flatten().firstOrNull()?.let(::playerById)
                 if (target != null) {
-                    angelReviveId = target.id
-                    addLog("Ангел выбрал ${target.name}")
+                    martyrReviveId = target.id
+                    addLog("Смертник решил вернуть ${target.name} ценой своей жизни")
+                }
+            }
+            Role.GUARDIAN -> {
+                val chosen = s.submissions.values.flatten()
+                    .filter { id -> playerById(id)?.alive == true }
+                    .distinct()
+                guardedIds += chosen
+                if (chosen.isNotEmpty()) {
+                    addLog("Ангел-Хранитель защищает: ${chosen.joinToString { playerById(it)?.name ?: "?" }}")
                 }
             }
             Role.WITCH -> {
@@ -901,36 +1030,44 @@ class GameEngine(
         phase = Phase.NIGHT_RESULTS
         phaseEndsAt = null
         step = null
+        autoAdvanceAt = if (autoHostEnabled) now + AUTO_RESULT_MS else null
         events = mutableListOf()
         var someoneDied = false
 
-        val revived = angelReviveId?.let(::playerById)
-        if (revived != null && !revived.alive) {
-            revived.alive = true
-            events += "😇 Ангел воскресил ${revived.name}."
-            addLog("Ангел воскресил ${revived.name}")
+        // Смертник отдаёт жизнь за возвращение погибшего.
+        val martyr = players.firstOrNull { it.alive && it.role == Role.MARTYR }
+        val martyrTarget = martyrReviveId?.let(::playerById)
+        if (martyr != null && martyrTarget != null && !martyrTarget.alive) {
+            martyrTarget.alive = true
+            martyr.alive = false
+            someoneDied = true
+            events += "🕯️ Смертник отдал жизнь и вернул ${martyrTarget.name}."
+            addLog("Смертник ${martyr.name} погиб, воскресив ${martyrTarget.name}")
+            maybeGuardian(martyr)
         }
 
         val mafiaTarget = pendingMafiaTargetId?.let(::playerById)
         if (mafiaTarget != null) {
             when {
-                mafiaTarget.id == revived?.id ->
-                    events += "🔴 Мафия выбрала ${mafiaTarget.name}, но ангел вернул его в игру."
+                mafiaTarget.id in guardedIds ->
+                    events += "👼 Ангел-Хранитель защитил ${mafiaTarget.name} от мафии."
                 mafiaTarget.id == doctorTargetId ->
                     events += "💚 Доктор спас ${mafiaTarget.name} от мафии."
                 mafiaTarget.alive -> {
                     mafiaTarget.alive = false
                     someoneDied = true
                     events += "🔴 Мафия убила ${mafiaTarget.name}."
+                    maybeGuardian(mafiaTarget)
                 }
+                else -> events += "🔴 Мафия выбрала ${mafiaTarget.name}, но тот уже был мёртв."
             }
         }
 
         val maniacTarget = pendingManiacTargetId?.let(::playerById)
         if (maniacTarget != null) {
             when {
-                maniacTarget.id == revived?.id ->
-                    events += "🔪 Маньяк выбрал ${maniacTarget.name}, но ангел вернул его в игру."
+                maniacTarget.id in guardedIds ->
+                    events += "👼 Ангел-Хранитель защитил ${maniacTarget.name} от маньяка."
                 maniacTarget.id == doctorTargetId ->
                     events += "💚 Доктор спас ${maniacTarget.name} от маньяка."
                 !maniacTarget.alive ->
@@ -939,6 +1076,7 @@ class GameEngine(
                     maniacTarget.alive = false
                     someoneDied = true
                     events += "🔪 Маньяк убил ${maniacTarget.name}."
+                    maybeGuardian(maniacTarget)
                 }
             }
         }
@@ -967,7 +1105,7 @@ class GameEngine(
 
         witchEvent?.let { events += it }
 
-        if (!someoneDied && revived == null) {
+        if (!someoneDied) {
             events += "Этой ночью никто не погиб."
         }
 
@@ -1059,6 +1197,7 @@ class GameEngine(
         phase = Phase.VOTE_RESULTS
         phaseEndsAt = null
         voteEndsAt = 0
+        autoAdvanceAt = if (autoHostEnabled) now + AUTO_RESULT_MS else null
         events = mutableListOf()
 
         val top = voteCounts.values.maxOrNull() ?: 0
@@ -1074,6 +1213,8 @@ class GameEngine(
                 if (eliminated.role == Role.JESTER) {
                     jesterWon = true
                     events += "🃏 Это был Шут! Шут добился своего и побеждает!"
+                } else {
+                    maybeGuardian(eliminated)
                 }
             }
         } else {
@@ -1135,10 +1276,75 @@ class GameEngine(
         drugBlocked.clear()
         beautyBlocked.clear()
         privateMessages.clear()
+        guardians.clear()
+        guardedIds.clear()
+        pistolHolderId = null
+        pistolUsed = false
+        pistolSnoozedDay = 0
+        martyrReviveId = null
+        autoAdvanceAt = null
         events = mutableListOf("↩️ Комната вернулась в лобби")
         addLog("Ведущий вернул комнату в лобби")
         emit()
         ActionResult(true)
+    }
+
+    // ─────────────────────────────────────────
+    //  Чат и экраны игроков
+    // ─────────────────────────────────────────
+
+    fun sendChat(playerId: String, token: String, textRaw: String): ActionResult = synchronized(lock) {
+        val p = auth(playerId, token)
+            ?: return@synchronized ActionResult(false, "Сессия не найдена")
+        val text = textRaw.trim().replace("\n", " ").take(300)
+        if (text.isBlank()) return@synchronized ActionResult(false, "Пустое сообщение")
+        val now = System.currentTimeMillis()
+        chatSeq += 1
+        chat += ChatMessage(
+            id = chatSeq,
+            authorId = p.id,
+            authorName = p.name,
+            text = text,
+            at = now,
+            dead = !p.alive
+        )
+        if (chat.size > 200) chat.removeAt(0)
+        emit(now)
+        ActionResult(true)
+    }
+
+    fun recordActivity(
+        playerId: String,
+        token: String,
+        screen: String,
+        detail: String,
+        scroll: Int
+    ): ActionResult = synchronized(lock) {
+        val p = auth(playerId, token)
+            ?: return@synchronized ActionResult(false, "Сессия не найдена")
+        val now = System.currentTimeMillis()
+        activity[p.id] = PlayerActivity(
+            playerId = p.id,
+            playerName = p.name,
+            screen = screen.trim().take(40).ifBlank { "—" },
+            detail = detail.trim().take(120),
+            scroll = scroll.coerceIn(0, 100),
+            at = now
+        )
+        emit(now)
+        ActionResult(true)
+    }
+
+    /** Шанс стать Ангелом-Хранителем после смерти. */
+    private fun maybeGuardian(p: GamePlayer) {
+        if (p.role?.team != Team.PEACEFUL) return
+        if (p.id in guardians) return
+        if (Random.nextDouble() >= GUARDIAN_CHANCE) return
+        guardians += p.id
+        privateMessages[p.id] =
+            "👼 Вы стали Ангелом-Хранителем! Каждую ночь можете защитить одного игрока от мафии и маньяка."
+        events += "👼 ${p.name} стал Ангелом-Хранителем."
+        addLog("${p.name} стал Ангелом-Хранителем")
     }
 
     private fun checkWinner(): String? {
@@ -1198,7 +1404,8 @@ class GameEngine(
                 roleDescription = p.role?.description,
                 roleTeam = p.role?.team?.name?.lowercase(),
                 isYou = false,
-                left = p.left
+                left = p.left,
+                guardian = p.id in guardians
             )
         }
 
@@ -1253,7 +1460,12 @@ class GameEngine(
             vote = voteStatus(),
             canStart = phase == Phase.LOBBY && players.count { !it.left } >= MIN_PLAYERS,
             canRestart = phase == Phase.GAME_OVER,
-            allowedRoles = config.allowedRoles.toList()
+            allowedRoles = config.allowedRoles.toList(),
+            autoHost = autoHostEnabled,
+            chat = chat.toList(),
+            activity = activity.values.sortedByDescending { it.at },
+            pistolHolder = pistolHolderId?.let { playerById(it)?.name },
+            guardianNames = guardians.mapNotNull { playerById(it)?.name }
         )
     }
 
@@ -1283,7 +1495,8 @@ class GameEngine(
                 roleDescription = if (show) other.role?.description else null,
                 roleTeam = if (show) other.role?.team?.name?.lowercase() else null,
                 isYou = other.id == viewer.id,
-                left = other.left
+                left = other.left,
+                guardian = other.id in guardians
             )
         }
 
@@ -1311,7 +1524,8 @@ class GameEngine(
             winner = winner,
             rolesRevealed = rolesRevealed,
             nightRoleTitle = s?.role?.title,
-            nightRoleIcon = s?.role?.icon
+            nightRoleIcon = s?.role?.icon,
+            chat = chat.toList()
         )
     }
 
@@ -1346,6 +1560,20 @@ class GameEngine(
                 return ActionPrompt(
                     kind = "sniper",
                     title = "🎯 Один выстрел за игру. Если попадёте в мирного — погибнете сами.",
+                    targets = targets,
+                    canSkip = true,
+                    minTargets = 1,
+                    maxTargets = 1,
+                    endsAt = phaseEndsAt ?: 0L
+                )
+            }
+            if (pistolHolderId == viewer.id && !pistolUsed && pistolSnoozedDay != dayNum) {
+                val targets = alivePlayers()
+                    .filter { it.id != viewer.id }
+                    .map { TargetView(it.id, it.name, it.device, it.alive) }
+                return ActionPrompt(
+                    kind = "pistol",
+                    title = "🔫 У вас пистолет. Можно один раз за игру убить любого игрока.",
                     targets = targets,
                     canSkip = true,
                     minTargets = 1,

@@ -16,6 +16,7 @@
   let lastSig = '';
   let serverOffset = 0;
   let pollTimer = null;
+  let activityTimer = null;
   let connectionLost = false;
   let joining = false;
   let joinError = '';
@@ -25,13 +26,19 @@
   let selection = new Set();
   let sentSig = '';
 
+  // Чат живёт отдельно от #app, чтобы ввод не терял фокус при перерисовке.
+  let chatSig = '';
+  let chatOpen = false;
+  let unread = 0;
+  let lastSeenChatId = 0;
+
   // ─────────────────────────────────────────
   //  API
   // ─────────────────────────────────────────
 
   async function api(path, opts = {}) {
     const headers = { Accept: 'application/json' };
-    if (opts.body) headers['Content-Type'] = 'application/json';
+    if (opts.body) headers['Content-Type'] = 'application/json; charset=utf-8';
     const response = await fetch(path, { ...opts, headers });
     const text = await response.text();
     let data = {};
@@ -111,15 +118,17 @@
     state = snapshot;
     serverOffset = snapshot.serverNow - Date.now();
     lastSig = stateSig(snapshot);
+    lastSeenChatId = (snapshot.chat || []).reduce((max, m) => Math.max(max, m.id || 0), 0);
     connectionLost = false;
     joining = false;
     render();
     startPolling();
+    startActivityReporting();
   }
 
   function startPolling() {
     stopPolling();
-    pollTimer = setInterval(poll, 1000);
+    pollTimer = setInterval(poll, 1200);
     poll();
   }
 
@@ -127,6 +136,18 @@
     if (pollTimer) {
       clearInterval(pollTimer);
       pollTimer = null;
+    }
+  }
+
+  function startActivityReporting() {
+    stopActivityReporting();
+    activityTimer = setInterval(reportActivity, 3000);
+  }
+
+  function stopActivityReporting() {
+    if (activityTimer) {
+      clearInterval(activityTimer);
+      activityTimer = null;
     }
   }
 
@@ -146,6 +167,7 @@
       } else {
         updateCountdowns();
       }
+      renderChat();
     } catch (e) {
       const message = e.message || '';
       if (message.includes('Сессия') || message.includes('404')) {
@@ -153,6 +175,8 @@
         session = null;
         state = null;
         stopPolling();
+        stopActivityReporting();
+        renderChat();
         renderJoin('Сессия истекла. Войдите снова.');
         return;
       }
@@ -182,7 +206,7 @@
         <div class="brand">
           <div class="mask">🎭</div>
           <h1>МАФИЯ</h1>
-          <p>Локальная игра. Телефон ведущего и ваш телефон должны быть в одной сети.</p>
+          <p>Играют все на сайте. Телефон ведущего и ваш телефон должны быть в одной сети.</p>
         </div>
 
         <div class="card hero">
@@ -215,8 +239,7 @@
           </button>
         </form>
 
-        <div class="hint center">На iPhone сайт открывается в Safari — приложение не нужно.</div>
-        <div class="footer">Иконка рядом с именем показывает, с какого устройства играет человек.</div>
+        <div class="hint center">Имя можно писать по-русски. Вход с телефона или компьютера.</div>
       </div>`;
   }
 
@@ -269,9 +292,13 @@
     session = null;
     state = null;
     stopPolling();
+    stopActivityReporting();
     joining = false;
     joinError = '';
     actionError = '';
+    chatSig = '';
+    unread = 0;
+    renderChat();
     if (old) {
       try {
         await api('/api/leave', {
@@ -296,11 +323,14 @@
       renderJoin();
       return;
     }
+    document.body.classList.toggle('night',
+      state.phase === 'night_intro' || state.phase === 'night_step' || state.phase === 'night_results');
     if (state.phase === 'lobby') {
       renderLobby();
     } else {
       renderGame();
     }
+    renderChat();
     updateCountdowns();
   }
 
@@ -338,6 +368,8 @@
           <span>Ждём ведущего. Игра начнётся, когда все соберутся.</span>
         </div>
 
+        <div class="hint center">Напишите другим в чат — кнопка 💬 внизу справа.</div>
+
         <div style="height:12px"></div>
         <button class="btn ghost" data-action="leave">Выйти из комнаты</button>
       </div>`;
@@ -361,6 +393,7 @@
       <div class="role-card ${prominent ? 'prominent' : ''} ${roleClass}">
         <div class="role-icon">${esc(role.roleIcon || '❔')}</div>
         <div class="role-title">${esc(role.roleTitle || 'Роль скрыта')}</div>
+        ${role.guardian ? '<div class="guardian-tag">👼 Ангел-Хранитель</div>' : ''}
         ${prominent && role.roleDescription ? `<p class="muted center" style="margin:10px 0 0">${esc(role.roleDescription)}</p>` : ''}
       </div>`;
 
@@ -389,7 +422,7 @@
         ${winner ? `<div class="winner">${esc(winnerText(winner))}</div>` : ''}
         ${roleHtml}
         ${phaseHtml}
-        ${!state.you.alive && !winner ? '<div class="banner">Вы выбыли из игры. Можно наблюдать за партией.</div>' : ''}
+        ${!state.you.alive && !winner && !prompt ? '<div class="banner">Вы выбыли из игры. Можно наблюдать за партией и писать в чат.</div>' : ''}
         ${promptHtml}
         ${privateHtml}
         ${voteHtml}
@@ -403,6 +436,23 @@
       </div>`;
 
     syncPromptUi();
+  }
+
+  function promptHint(prompt) {
+    if (prompt.kind === 'sniper') return 'Один выстрел за игру. Промах убьёт вас.';
+    if (prompt.kind === 'pistol') return 'Пистолет можно использовать один раз за игру.';
+    if (prompt.kind === 'vote') return 'Голос нельзя изменить.';
+    if (prompt.kind === 'mafia') return 'Решение мафии принимается большинством.';
+    const title = prompt.title || '';
+    if (title.includes('Смертник')) return 'Вы погибнете, но вернёте выбранного игрока в игру.';
+    if (title.includes('Хранитель')) return 'Защита действует только эту ночь.';
+    return '';
+  }
+
+  function skipLabel(prompt) {
+    if (prompt.kind === 'vote') return 'Воздержаться';
+    if (prompt.kind === 'pistol') return 'Не сейчас';
+    return 'Пропустить';
   }
 
   function promptCardHtml(prompt, sig) {
@@ -425,17 +475,19 @@
         </div>`;
     }
 
+    const hint = promptHint(prompt);
+
     return `
       <div class="card prompt">
         <div class="prompt-title">${esc(prompt.title)}</div>
         ${prompt.maxTargets > 1 ? `<div class="muted">Выберите ${prompt.maxTargets} игрока</div>` : ''}
-        ${prompt.kind === 'sniper' ? '<div class="hint">Один выстрел за игру. Промах убьёт вас.</div>' : ''}
+        ${hint ? `<div class="hint">${esc(hint)}</div>` : ''}
         <div class="countdown" data-countdown data-ends="${prompt.endsAt}"></div>
         <div class="targets">${targets}</div>
         <div class="row between small muted" id="selected-count">Выбрано: ${selection.size} из ${prompt.maxTargets}</div>
         <div style="height:10px"></div>
         <button class="btn primary" data-action="submit-prompt" ${selection.size < prompt.minTargets ? 'disabled' : ''}>Подтвердить</button>
-        ${prompt.canSkip ? `<div style="height:8px"></div><button class="btn ghost" data-action="skip-prompt">${prompt.kind === 'vote' ? 'Воздержаться' : 'Пропустить'}</button>` : ''}
+        ${prompt.canSkip ? `<div style="height:8px"></div><button class="btn ghost" data-action="skip-prompt">${skipLabel(prompt)}</button>` : ''}
       </div>`;
   }
 
@@ -465,6 +517,7 @@
           <div class="pname">
             ${esc(player.name)}
             ${player.isYou ? '<span class="you">вы</span>' : ''}
+            ${player.guardian ? '<span class="dead-tag gold-text">👼 хранитель</span>' : ''}
             ${player.alive ? '' : '<span class="dead-tag">выбыл</span>'}
             ${player.left && player.alive ? '<span class="dead-tag">нет связи</span>' : ''}
           </div>
@@ -490,6 +543,141 @@
   }
 
   // ─────────────────────────────────────────
+  //  Чат
+  // ─────────────────────────────────────────
+
+  function renderChat() {
+    const dock = document.getElementById('chat-dock');
+    if (!dock) return;
+    if (!state) {
+      dock.classList.add('hidden');
+      dock.classList.remove('open');
+      chatOpen = false;
+      return;
+    }
+    dock.classList.remove('hidden');
+
+    const messages = state.chat || [];
+    const sig = messages.map(m => m.id).join(',');
+    const log = document.getElementById('chat-log');
+    if (sig !== chatSig && log) {
+      chatSig = sig;
+      log.innerHTML = messages.length
+        ? messages.map(chatMessageHtml).join('')
+        : '<div class="chat-empty">Пока тихо. Напишите первым.</div>';
+      log.scrollTop = log.scrollHeight;
+
+      const newest = messages.length ? messages[messages.length - 1] : null;
+      if (newest && newest.id > lastSeenChatId) {
+        const fresh = messages.filter(m => m.id > lastSeenChatId && m.authorId !== state.you.id);
+        if (!chatOpen) unread += fresh.length;
+        lastSeenChatId = newest.id;
+      }
+    }
+
+    const badge = document.getElementById('chat-badge');
+    if (badge) {
+      badge.textContent = unread > 99 ? '99+' : String(unread);
+      badge.classList.toggle('hidden', unread === 0);
+    }
+    dock.classList.toggle('open', chatOpen);
+  }
+
+  function chatMessageHtml(message) {
+    const mine = state && state.you && message.authorId === state.you.id;
+    const time = new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `
+      <div class="chat-msg ${mine ? 'mine' : ''} ${message.dead ? 'dead' : ''}">
+        <div class="chat-meta">${message.dead ? '💀 ' : ''}${esc(message.authorName)} · ${time}</div>
+        <div class="chat-text">${esc(message.text)}</div>
+      </div>`;
+  }
+
+  async function sendChat(text) {
+    if (!session || !text) return;
+    await api('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        playerId: session.playerId,
+        token: session.token,
+        text
+      })
+    });
+    await poll();
+  }
+
+  function toggleChat() {
+    chatOpen = !chatOpen;
+    if (chatOpen) {
+      unread = 0;
+      const log = document.getElementById('chat-log');
+      if (log) log.scrollTop = log.scrollHeight;
+    }
+    renderChat();
+  }
+
+  // ─────────────────────────────────────────
+  //  Экраны игрока для ведущего
+  // ─────────────────────────────────────────
+
+  function activitySnapshot() {
+    let screen = 'Комната';
+    let detail = '';
+    const prompt = state.prompt;
+
+    if (state.phase === 'lobby') {
+      screen = 'Лобби';
+    } else if (state.phase === 'starting') {
+      screen = 'Раздача ролей';
+    } else if (prompt) {
+      screen = prompt.kind === 'vote' ? 'Голосование' : 'Выбор цели';
+      const names = (prompt.targets || [])
+        .filter(t => selection.has(t.id))
+        .map(t => t.name);
+      detail = names.length ? 'Выбрано: ' + names.join(', ') : 'Ничего не выбрано';
+    } else if (state.phase === 'voting') {
+      screen = 'Голосование';
+      detail = state.vote && state.vote.voterName
+        ? 'Голосует: ' + state.vote.voterName
+        : 'Ждёт голосования';
+    } else if (state.phase === 'day_discussion') {
+      screen = 'Обсуждение';
+    } else if (state.phase === 'night_step' || state.phase === 'night_intro') {
+      screen = 'Ночь';
+    } else if (state.phase === 'night_results') {
+      screen = 'Итоги ночи';
+    } else if (state.phase === 'vote_results') {
+      screen = 'Итоги голосования';
+    } else if (state.phase === 'game_over') {
+      screen = 'Финал';
+    }
+
+    if (!state.you.alive) detail = (detail ? detail + ' • ' : '') + 'выбыл';
+
+    const max = Math.max(1, document.body.scrollHeight - window.innerHeight);
+    const scroll = Math.round(Math.min(100, Math.max(0, (window.scrollY / max) * 100)));
+
+    return { screen, detail, scroll };
+  }
+
+  async function reportActivity() {
+    if (!session || !state) return;
+    try {
+      const snapshot = activitySnapshot();
+      await api('/api/activity', {
+        method: 'POST',
+        body: JSON.stringify({
+          playerId: session.playerId,
+          token: session.token,
+          screen: snapshot.screen,
+          detail: snapshot.detail,
+          scroll: snapshot.scroll
+        })
+      });
+    } catch (_) {}
+  }
+
+  // ─────────────────────────────────────────
   //  Действия
   // ─────────────────────────────────────────
 
@@ -512,10 +700,13 @@
         await action('vote', targets[0]);
       } else if (prompt.kind === 'sniper') {
         await action('sniper', targets[0]);
+      } else if (prompt.kind === 'pistol') {
+        await action('pistol', targets[0]);
       } else {
         await action('night', null, targets);
       }
       await poll();
+      reportActivity();
     } catch (e) {
       sentSig = '';
       actionError = e.message || 'Не удалось отправить выбор';
@@ -548,6 +739,14 @@
       event.preventDefault();
       join();
     }
+    if (event.target && event.target.id === 'chat-form') {
+      event.preventDefault();
+      const input = document.getElementById('chat-input');
+      const text = (input?.value || '').trim();
+      if (!text) return;
+      if (input) input.value = '';
+      sendChat(text).catch(() => {});
+    }
   });
 
   document.addEventListener('click', event => {
@@ -564,6 +763,7 @@
         selection.add(id);
       }
       syncPromptUi();
+      reportActivity();
       return;
     }
 
@@ -576,6 +776,8 @@
       submitPrompt(false);
     } else if (name === 'skip-prompt') {
       submitPrompt(true);
+    } else if (name === 'toggle-chat') {
+      toggleChat();
     } else if (name === 'retry') {
       boot();
     }
@@ -608,6 +810,7 @@
   function stateSig(snapshot) {
     const copy = { ...snapshot };
     copy.serverNow = 0;
+    copy.chat = [];
     return JSON.stringify(copy);
   }
 

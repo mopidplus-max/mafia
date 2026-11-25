@@ -49,22 +49,22 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/release/app-release.apk out/Mafia-1.0.apk
+          cp app/build/outputs/apk/release/app-release.apk out/Mafia-1.1.apk
           ls -l out
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: mafia-apk
-          path: out/Mafia-1.0.apk
+          path: out/Mafia-1.1.apk
           if-no-files-found: error
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.0
-          name: Мафия 1.0
+          tag_name: v1.1.0
+          name: Мафия 1.1
           body: |
             Сборка по локальной сети: ведущий раздаёт Wi-Fi, Android-игроки
             заходят в приложение, iPhone — по адресу комнаты в Safari.
-          files: out/Mafia-1.0.apk
+          files: out/Mafia-1.1.apk

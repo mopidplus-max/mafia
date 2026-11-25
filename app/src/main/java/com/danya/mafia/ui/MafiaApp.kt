@@ -21,14 +21,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 fun MafiaApp(vm: AppViewModel = viewModel()) {
     val screen by vm.screen.collectAsStateWithLifecycle()
     val hostState by vm.hostState.collectAsStateWithLifecycle()
-    val clientState by vm.clientState.collectAsStateWithLifecycle()
-    val roomInfo by vm.roomInfo.collectAsStateWithLifecycle()
     val busy by vm.busy.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val roomUrl by vm.roomUrl.collectAsStateWithLifecycle()
     val hostIp by vm.hostIp.collectAsStateWithLifecycle()
-    val lastAddress by vm.lastAddress.collectAsStateWithLifecycle()
-    val connectionLost by vm.connectionLost.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
 
@@ -52,23 +48,14 @@ fun MafiaApp(vm: AppViewModel = viewModel()) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            when (val current = screen) {
+            when (screen) {
                 Screen.Home -> HomeScreen(
-                    onCreate = vm::goCreate,
-                    onJoin = vm::goJoin
+                    onCreate = vm::goCreate
                 )
                 Screen.Create -> CreateRoomScreen(
                     busy = busy,
                     onBack = vm::back,
                     onCreate = vm::createRoom
-                )
-                Screen.Join -> JoinScreen(
-                    busy = busy,
-                    lastAddress = lastAddress,
-                    roomInfo = roomInfo,
-                    onBack = vm::back,
-                    onProbe = vm::probeRoom,
-                    onJoin = vm::joinRoom
                 )
                 Screen.Host -> {
                     val state = hostState
@@ -83,20 +70,8 @@ fun MafiaApp(vm: AppViewModel = viewModel()) {
                             onAdvance = vm::hostAdvance,
                             onRestart = vm::hostRestart,
                             onClose = vm::goHome,
-                            onRefreshUrl = vm::refreshHostUrl
-                        )
-                    }
-                }
-                Screen.Player -> {
-                    val state = clientState
-                    if (state == null) {
-                        LoadingScreen()
-                    } else {
-                        PlayerScreen(
-                            state = state,
-                            connectionLost = connectionLost,
-                            onAction = vm::sendAction,
-                            onLeave = vm::leaveClient
+                            onRefreshUrl = vm::refreshHostUrl,
+                            onToggleAutoHost = vm::setAutoHost
                         )
                     }
                 }

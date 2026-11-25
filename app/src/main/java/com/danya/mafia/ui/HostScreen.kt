@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +39,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,7 +54,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.danya.mafia.game.ChatMessage
 import com.danya.mafia.game.HostSnapshot
+import com.danya.mafia.game.PlayerActivity
 import com.danya.mafia.game.PlayerView
 import com.danya.mafia.game.VoteStatus
 
@@ -64,7 +69,8 @@ fun HostScreen(
     onAdvance: () -> Unit,
     onRestart: () -> Unit,
     onClose: () -> Unit,
-    onRefreshUrl: () -> Unit
+    onRefreshUrl: () -> Unit,
+    onToggleAutoHost: (Boolean) -> Unit
 ) {
     KeepScreenOn()
     var confirmClose by remember { mutableStateOf(false) }
@@ -77,14 +83,17 @@ fun HostScreen(
             hostIp = hostIp,
             onStart = onStart,
             onClose = requestClose,
-            onRefreshUrl = onRefreshUrl
+            onRefreshUrl = onRefreshUrl,
+            onToggleAutoHost = onToggleAutoHost
         )
     } else {
         HostGame(
             state = state,
+            roomUrl = roomUrl,
             onAdvance = onAdvance,
             onRestart = onRestart,
-            onClose = requestClose
+            onClose = requestClose,
+            onToggleAutoHost = onToggleAutoHost
         )
     }
 
@@ -118,7 +127,8 @@ private fun HostLobby(
     hostIp: String?,
     onStart: () -> Unit,
     onClose: () -> Unit,
-    onRefreshUrl: () -> Unit
+    onRefreshUrl: () -> Unit,
+    onToggleAutoHost: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
@@ -151,8 +161,11 @@ private fun HostLobby(
                 )
             }
 
-            item { SectionTitle("Участники (${state.players.size})") }
+            item {
+                AutoHostRow(enabled = state.autoHost, onChange = onToggleAutoHost)
+            }
 
+            item { SectionTitle("Участники (${state.players.size})") }
             if (state.players.isEmpty()) {
                 item { WaitingCard("Ждём игроков. Пока никого нет.") }
             } else {
@@ -192,7 +205,7 @@ private fun HostLobby(
 
             item {
                 Text(
-                    "Ведущий не играет. Когда начнётся игра, вы увидите роли всех участников и будете нажимать «Далее».",
+                    "Ведущий может играть на сайте вместе со всеми — включите автоведущего выше.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -211,6 +224,7 @@ private fun RoomHeroCard(
     onRefreshUrl: () -> Unit,
     onCopy: (String) -> Unit
 ) {
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
@@ -250,7 +264,7 @@ private fun RoomHeroCard(
 
             if (roomUrl != null) {
                 Text(
-                    "Откройте на iPhone в Safari:",
+                    "Откройте в браузере на любом телефоне:",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -267,10 +281,20 @@ private fun RoomHeroCard(
                     }
                 }
                 Text(
-                    "Android-игроки вводят этот адрес в «Подключиться».",
+                    "Все играют на сайте — ведущий тоже может зайти по этой ссылке.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { openUrl(context, roomUrl) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Text("Открыть сайт и играть")
+                }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Wifi, contentDescription = null)
@@ -316,10 +340,13 @@ private fun WaitingCard(text: String) {
 @Composable
 private fun HostGame(
     state: HostSnapshot,
+    roomUrl: String?,
     onAdvance: () -> Unit,
     onRestart: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onToggleAutoHost: (Boolean) -> Unit
 ) {
+    val context = LocalContext.current
     var showLog by remember { mutableStateOf(false) }
     val nightTitle = state.nightTitle
     val nightBody = state.nightBody
@@ -331,6 +358,11 @@ private fun HostGame(
             title = state.roomName,
             onBack = onClose,
             actions = {
+                if (roomUrl != null) {
+                    TextButton(onClick = { openUrl(context, roomUrl) }) {
+                        Text("🌐")
+                    }
+                }
                 TextButton(onClick = onClose) {
                     Icon(Icons.Filled.Close, contentDescription = "Закрыть")
                 }
@@ -348,6 +380,10 @@ private fun HostGame(
                     onAdvance = onAdvance,
                     onRestart = onRestart
                 )
+            }
+
+            item {
+                AutoHostRow(enabled = state.autoHost, onChange = onToggleAutoHost)
             }
 
             if (nightTitle != null) {
@@ -422,6 +458,9 @@ private fun HostGame(
                 item { EventsCard(state.events) }
             }
 
+            item { ActivityCard(state.activity) }
+            item { ChatCard(state.chat) }
+
             item {
                 TextButton(onClick = { showLog = !showLog }) {
                     Text(if (showLog) "Скрыть журнал" else "Показать журнал")
@@ -466,6 +505,22 @@ private fun PhaseCard(state: HostSnapshot, onAdvance: () -> Unit, onRestart: () 
                 Text(
                     state.actionProgress,
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            if (state.pistolHolder != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "🔫 Пистолет у ${state.pistolHolder}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            if (state.guardianNames.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "👼 Ангелы-Хранители: ${state.guardianNames.joinToString()}",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.secondary
                 )
             }
@@ -538,6 +593,127 @@ private fun VoteCard(vote: VoteStatus, serverNow: Long) {
                 CountdownLine(vote.endsAt, serverNow, label = "На голос")
             }
         }
+    }
+}
+
+@Composable
+private fun AutoHostRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Автоведущий",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    if (enabled) "Сам переключает ночь и итоги — можно играть на сайте"
+                    else "Вы ведёте вручную кнопкой «Далее»",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = onChange)
+        }
+    }
+}
+
+@Composable
+private fun ActivityCard(activity: List<PlayerActivity>) {
+    if (activity.isEmpty()) return
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                "👀 Экраны игроков",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Что сейчас происходит на сайте у каждого.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            activity.forEach { a ->
+                Spacer(Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "${a.playerName} — ${a.screen}",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+                if (a.detail.isNotBlank()) {
+                    Text(
+                        a.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    "прокрутка: ${a.scroll}%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatCard(chat: List<ChatMessage>) {
+    if (chat.isEmpty()) return
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                "💬 Чат",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(8.dp))
+            chat.takeLast(14).forEach { m ->
+                Text(
+                    buildString {
+                        if (m.dead) append("💀 ")
+                        append(m.authorName)
+                        append(": ")
+                        append(m.text)
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (m.dead) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(Modifier.height(4.dp))
+            }
+        }
+    }
+}
+
+private fun openUrl(context: Context, url: String) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    } catch (_: Exception) {
     }
 }
 

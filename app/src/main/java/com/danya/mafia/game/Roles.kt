@@ -43,10 +43,10 @@ enum class Role(
         "Ночью приходит к одному игроку. Тот пропускает своё ночное действие " +
             "и дневное голосование. Побеждает с мирными."
     ),
-    ANGEL(
-        "angel", "Ангел", "😇", Team.PEACEFUL,
-        "Со 2-й ночи может воскресить одного погибшего игрока. " +
-            "Воскрешённый возвращается со своей ролью. Побеждает с мирными."
+    MARTYR(
+        "martyr", "Смертник", "🕯️", Team.PEACEFUL,
+        "Ночью может отдать свою жизнь, чтобы вернуть в игру одного погибшего. " +
+            "Свою жизнь он не сохраняет. Может пропустить ход. Побеждает с мирными."
     ),
     MAYOR(
         "mayor", "Мэр", "🏛️", Team.PEACEFUL,
@@ -82,6 +82,11 @@ enum class Role(
         "civilian", "Мирный", "⬜", Team.PEACEFUL,
         "Обычный житель города. Участвует в обсуждении и голосовании. " +
             "Побеждает, когда уничтожены мафия и маньяк."
+    ),
+    GUARDIAN(
+        "guardian", "Ангел-Хранитель", "👼", Team.PEACEFUL,
+        "Появляется после смерти с шансом 40%. Каждую ночь защищает одного игрока " +
+            "от мафии и маньяка. Сам уже мёртв и в голосовании не участвует."
     );
 
     val isMafia: Boolean get() = team == Team.MAFIA
@@ -91,13 +96,13 @@ enum class Role(
 
         /** Роли, которые ведущий может включить в комнате. */
         val selectable: List<Role> = listOf(
-            MAFIA, DON, ADVOCATE, DOCTOR, COMMISSIONER, BEAUTY, ANGEL,
+            MAFIA, DON, ADVOCATE, DOCTOR, COMMISSIONER, BEAUTY, MARTYR,
             MAYOR, JESTER, WITCH, DRUGGIE, MANIAC, SNIPER, CIVILIAN
         )
 
         val defaultAllowed: Set<String> = setOf(
             MAFIA.id, DON.id, DOCTOR.id, COMMISSIONER.id, BEAUTY.id,
-            MANIAC.id, MAYOR.id, JESTER.id, CIVILIAN.id
+            MARTYR.id, MANIAC.id, MAYOR.id, JESTER.id, CIVILIAN.id
         )
     }
 }

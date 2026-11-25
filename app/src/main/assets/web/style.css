@@ -378,3 +378,208 @@ input::placeholder { color: #8f8a96; }
 @media (min-width: 480px) {
   .screen { padding-left: 24px; padding-right: 24px; }
 }
+
+/* ─────────────────────────────────────────
+   Ночь, появление карточек и «живые» детали
+   ───────────────────────────────────────── */
+
+body.night {
+  background:
+    radial-gradient(2px 2px at 18% 14%, rgba(255, 255, 255, 0.55), transparent 60%),
+    radial-gradient(1.5px 1.5px at 72% 26%, rgba(255, 255, 255, 0.45), transparent 60%),
+    radial-gradient(1.5px 1.5px at 42% 62%, rgba(255, 255, 255, 0.4), transparent 60%),
+    radial-gradient(2px 2px at 88% 72%, rgba(255, 255, 255, 0.35), transparent 60%),
+    radial-gradient(1200px 600px at 50% -10%, rgba(38, 34, 92, 0.5), transparent 62%),
+    radial-gradient(900px 500px at 100% 110%, rgba(90, 67, 0, 0.14), transparent 60%),
+    linear-gradient(180deg, #07060d, #0b0a14 50%, #05040a);
+}
+
+@keyframes pop {
+  0% { opacity: 0; transform: translateY(10px) scale(0.98); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes flipIn {
+  0% { opacity: 0; transform: perspective(700px) rotateX(-24deg) translateY(14px); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-6px) rotate(2deg); }
+}
+
+@keyframes winnerPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(231, 195, 101, 0.35); transform: scale(1); }
+  50% { box-shadow: 0 0 0 14px rgba(231, 195, 101, 0); transform: scale(1.012); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes badgePop {
+  0% { transform: scale(0.4); }
+  70% { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+
+.card, .player, .role-card, .winner, .banner {
+  animation: pop 280ms ease-out both;
+}
+.player:nth-child(2) { animation-delay: 30ms; }
+.player:nth-child(3) { animation-delay: 60ms; }
+.player:nth-child(4) { animation-delay: 90ms; }
+.player:nth-child(5) { animation-delay: 120ms; }
+.player:nth-child(6) { animation-delay: 150ms; }
+.player:nth-child(7) { animation-delay: 180ms; }
+.player:nth-child(8) { animation-delay: 210ms; }
+
+.role-card { animation: flipIn 460ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.role-card .role-icon { display: inline-block; animation: floaty 3.4s ease-in-out infinite; }
+.role-card.prominent { animation: flipIn 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both, winnerPulse 2.6s ease-in-out 600ms infinite; }
+
+.winner { animation: pop 320ms ease-out both, winnerPulse 1.8s ease-in-out 320ms infinite; }
+
+.target.selected { animation: pop 180ms ease-out; }
+.target.selected .avatar { animation: floaty 1.8s ease-in-out infinite; }
+
+.brand .mask { display: inline-block; animation: floaty 4s ease-in-out infinite; }
+
+.progress > i { background: linear-gradient(90deg, var(--secondary), #ffe08a); }
+
+.phase-label { animation: pop 300ms ease-out both; }
+
+.dead-tag.gold-text { color: var(--secondary); }
+
+.guardian-tag {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--secondary-container);
+  color: var(--on-secondary-container);
+  font-size: 12px;
+  font-weight: 800;
+  animation: pop 300ms ease-out both;
+}
+
+/* ─────────────────────────────────────────
+   Чат
+   ───────────────────────────────────────── */
+
+.chat-dock {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: none;
+}
+.chat-dock > * { pointer-events: auto; }
+.chat-dock.hidden { display: none; }
+
+.chat-log {
+  display: none;
+  width: min(340px, calc(100vw - 32px));
+  max-height: 44vh;
+  overflow-y: auto;
+  background: rgba(29, 27, 32, 0.96);
+  border: 1px solid rgba(147, 143, 153, 0.22);
+  border-radius: 22px;
+  padding: 12px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+}
+.chat-dock.open .chat-log { display: block; animation: slideUp 220ms ease-out; }
+
+.chat-empty { color: var(--muted); font-size: 13px; text-align: center; padding: 8px; }
+
+.chat-msg {
+  background: var(--surface-2);
+  border-radius: 14px;
+  padding: 8px 11px;
+  margin-bottom: 7px;
+  animation: msgIn 180ms ease-out both;
+}
+.chat-msg.mine { background: var(--primary-container); color: var(--on-primary-container); }
+.chat-msg.dead { opacity: 0.72; }
+.chat-meta { font-size: 11px; font-weight: 700; opacity: 0.7; margin-bottom: 2px; }
+.chat-text { font-size: 14px; word-wrap: break-word; overflow-wrap: anywhere; }
+
+.chat-form {
+  display: none;
+  width: min(340px, calc(100vw - 32px));
+  gap: 8px;
+  align-items: center;
+}
+.chat-dock.open .chat-form { display: flex; animation: slideUp 200ms ease-out; }
+.chat-form input {
+  height: 46px;
+  border-radius: 999px;
+  background: rgba(29, 27, 32, 0.96);
+  border: 1px solid var(--outline-variant);
+}
+.chat-send {
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 18px;
+  font-weight: 900;
+  cursor: pointer;
+}
+.chat-send:active { transform: scale(0.94); }
+
+.chat-toggle {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 24px;
+  cursor: pointer;
+  box-shadow: 0 12px 30px rgba(255, 180, 171, 0.25);
+  transition: transform 140ms;
+}
+.chat-toggle:active { transform: scale(0.94); }
+
+.chat-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--on-secondary);
+  font-size: 12px;
+  font-weight: 900;
+  display: grid;
+  place-items: center;
+  animation: badgePop 220ms ease-out;
+}
+.chat-badge.hidden { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

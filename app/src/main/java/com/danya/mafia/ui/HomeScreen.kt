@@ -14,9 +14,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Login
 import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,7 +29,7 @@ import com.danya.mafia.ui.theme.Ink
 import com.danya.mafia.ui.theme.InkRaised
 
 @Composable
-fun HomeScreen(onCreate: () -> Unit, onJoin: () -> Unit) {
+fun HomeScreen(onCreate: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -51,7 +49,7 @@ fun HomeScreen(onCreate: () -> Unit, onJoin: () -> Unit) {
             MafiaWordmark()
             Spacer(Modifier.height(12.dp))
             Text(
-                "Локальная игра по Wi-Fi или точке доступа",
+                "Пульт ведущего. Играют все — в браузере",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -70,30 +68,18 @@ fun HomeScreen(onCreate: () -> Unit, onJoin: () -> Unit) {
                 Text("Создать комнату", style = MaterialTheme.typography.titleMedium)
             }
 
-            Spacer(Modifier.height(14.dp))
-
-            FilledTonalButton(
-                onClick = onJoin,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(58.dp),
-                shape = RoundedCornerShape(22.dp)
-            ) {
-                Icon(Icons.Filled.Login, contentDescription = null)
-                Spacer(Modifier.width(10.dp))
-                Text("Подключиться", style = MaterialTheme.typography.titleMedium)
-            }
-
             Spacer(Modifier.height(36.dp))
             Text(
-                "Ведущий не играет — он видит роли и ведёт партию.",
+                "Приложение раздаёт комнату по Wi-Fi или точке доступа. " +
+                    "Игроки открывают адрес комнаты в браузере на телефоне — " +
+                    "играть можно только на сайте.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Игроки на Android подключаются в приложении, на iPhone — через Safari.",
+                "Ведущий тоже может играть: включите автоведущего в комнате.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
