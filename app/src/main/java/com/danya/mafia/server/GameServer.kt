@@ -8,7 +8,7 @@ import org.json.JSONObject
 
 /**
  * HTTP-сервер комнаты.
- * Android-игроки ходят в те же /api/*, что и веб-клиент для iOS.
+ * Android-игроки ходят в те же адреса /api/..., что и веб-клиент для iOS.
  */
 class GameServer(
     private val context: Context,
