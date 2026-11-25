@@ -84,6 +84,13 @@ fun HomeScreen(onCreate: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Не в одной сети? В лобби включите «Игра на расстоянии» через Vercel.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }

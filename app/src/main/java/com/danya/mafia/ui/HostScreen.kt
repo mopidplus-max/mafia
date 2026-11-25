@@ -669,11 +669,11 @@ private fun RelayCard(
                 value = codeValue,
                 onValueChange = { value ->
                     codeValue = value.uppercase()
-                        .filter { it.isLetterOrDigit() }
+                        .filter { it in 'A'..'Z' || it in '0'..'9' }
                         .take(8)
                 },
                 label = { Text("Код комнаты") },
-                supportingText = { Text("Игроки вводят этот код на сайте реле") },
+                supportingText = { Text("Латинские буквы и цифры. Игроки вводят его на сайте реле") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )

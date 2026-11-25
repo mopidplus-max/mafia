@@ -186,7 +186,7 @@
 
   function startPolling() {
     stopPolling();
-    pollTimer = setInterval(poll, 1200);
+    pollTimer = setInterval(poll, RELAY ? 1600 : 1200);
     poll();
   }
 
@@ -199,7 +199,7 @@
 
   function startActivityReporting() {
     stopActivityReporting();
-    activityTimer = setInterval(reportActivity, 3000);
+    activityTimer = setInterval(reportActivity, RELAY ? 8000 : 3000);
   }
 
   function stopActivityReporting() {
@@ -718,10 +718,19 @@
     return { screen, detail, scroll };
   }
 
+  let lastActivitySig = '';
+  let lastActivityAt = 0;
+
   async function reportActivity() {
     if (!session || !state) return;
+    const snapshot = activitySnapshot();
+    const sig = snapshot.screen + '|' + snapshot.detail + '|' + snapshot.scroll;
+    const now = Date.now();
+    // Не дёргаем сервер (и реле) без изменений: обновляем не чаще раза в 30 с.
+    if (sig === lastActivitySig && now - lastActivityAt < 30000) return;
+    lastActivitySig = sig;
+    lastActivityAt = now;
     try {
-      const snapshot = activitySnapshot();
       await api('/api/activity', {
         method: 'POST',
         body: JSON.stringify({
@@ -732,7 +741,9 @@
           scroll: snapshot.scroll
         })
       });
-    } catch (_) {}
+    } catch (_) {
+      lastActivitySig = '';
+    }
   }
 
   // ─────────────────────────────────────────
@@ -848,6 +859,8 @@
       toggleChat();
     } else if (name === 'retry') {
       boot();
+    } else if (name === 'change-code') {
+      changeRelayCode();
     }
   });
 
@@ -932,7 +945,26 @@
         </div>
         <div class="banner error">${esc(message)}</div>
         <button class="btn primary" data-action="retry">Повторить</button>
+        ${RELAY ? '<div style="height:8px"></div><button class="btn ghost" data-action="change-code">Сменить код комнаты</button>' : ''}
       </div>`;
+  }
+
+  function changeRelayCode() {
+    if (!RELAY) return;
+    stopPolling();
+    stopActivityReporting();
+    clearSession();
+    session = null;
+    state = null;
+    chatSig = '';
+    unread = 0;
+    lastSeenChatId = 0;
+    RELAY.code = '';
+    try {
+      localStorage.removeItem('mafia_relay_code');
+    } catch (_) {}
+    renderChat();
+    renderRelayCodePrompt();
   }
 
   function renderRelayCodePrompt() {

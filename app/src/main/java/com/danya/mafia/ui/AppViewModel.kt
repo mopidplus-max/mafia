@@ -181,7 +181,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setRelay(url: String, code: String, enabled: Boolean) {
         val cleanUrl = url.trim().trimEnd('/')
-        val cleanCode = code.trim().uppercase().filter { it.isLetterOrDigit() }.take(8)
+        val cleanCode = code.trim().uppercase()
+            .filter { it in 'A'..'Z' || it in '0'..'9' }
+            .take(8)
         _relayUrl.value = cleanUrl
         _relayCode.value = cleanCode
         _relayEnabled.value = enabled
