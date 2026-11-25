@@ -1,0 +1,562 @@
+package com.danya.mafia.ui
+
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.view.WindowManager
+import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import com.danya.mafia.game.HostSnapshot
+import com.danya.mafia.game.PlayerView
+import com.danya.mafia.game.VoteStatus
+
+@Composable
+fun HostScreen(
+    state: HostSnapshot,
+    roomUrl: String?,
+    hostIp: String?,
+    onStart: () -> Unit,
+    onAdvance: () -> Unit,
+    onRestart: () -> Unit,
+    onClose: () -> Unit,
+    onRefreshUrl: () -> Unit
+) {
+    KeepScreenOn()
+    var confirmClose by remember { mutableStateOf(false) }
+    val requestClose: () -> Unit = { confirmClose = true }
+
+    if (state.phase == "lobby") {
+        HostLobby(
+            state = state,
+            roomUrl = roomUrl,
+            hostIp = hostIp,
+            onStart = onStart,
+            onClose = requestClose,
+            onRefreshUrl = onRefreshUrl
+        )
+    } else {
+        HostGame(
+            state = state,
+            onAdvance = onAdvance,
+            onRestart = onRestart,
+            onClose = requestClose
+        )
+    }
+
+    if (confirmClose) {
+        AlertDialog(
+            onDismissRequest = { confirmClose = false },
+            title = { Text("Закрыть комнату?") },
+            text = {
+                Text(
+                    if (state.phase == "lobby") "Все участники потеряют подключение."
+                    else "Игра будет прервана для всех участников."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClose = false
+                    onClose()
+                }) { Text("Закрыть") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClose = false }) { Text("Отмена") }
+            }
+        )
+    }
+}
+
+@Composable
+private fun HostLobby(
+    state: HostSnapshot,
+    roomUrl: String?,
+    hostIp: String?,
+    onStart: () -> Unit,
+    onClose: () -> Unit,
+    onRefreshUrl: () -> Unit
+) {
+    val context = LocalContext.current
+    Column(modifier = Modifier.fillMaxSize()) {
+        MafiaTopBar(
+            title = state.roomName,
+            onBack = onClose,
+            actions = {
+                TextButton(onClick = onClose) {
+                    Icon(Icons.Filled.Close, contentDescription = "Закрыть комнату")
+                }
+            }
+        )
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                RoomHeroCard(
+                    state = state,
+                    roomUrl = roomUrl,
+                    hostIp = hostIp,
+                    onRefreshUrl = onRefreshUrl,
+                    onCopy = { text ->
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("room", text))
+                        Toast.makeText(context, "Ссылка скопирована", Toast.LENGTH_SHORT).show()
+                    }
+                )
+            }
+
+            item { SectionTitle("Участники (${state.players.size})") }
+
+            if (state.players.isEmpty()) {
+                item { WaitingCard("Ждём игроков. Пока никого нет.") }
+            } else {
+                items(state.players, key = { it.id }) { player ->
+                    PlayerRow(player = player, showRole = false)
+                }
+            }
+
+            item { SectionTitle("Возможные роли") }
+            item { AllowedRolesRow(state.allowedRoles) }
+
+            item {
+                Spacer(Modifier.height(4.dp))
+                Button(
+                    onClick = onStart,
+                    enabled = state.canStart,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Начать игру", style = MaterialTheme.typography.titleMedium)
+                }
+                if (!state.canStart) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Нужно минимум ${state.minPlayers} игрока. Сейчас: ${state.players.size}.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+
+            item {
+                Text(
+                    "Ведущий не играет. Когда начнётся игра, вы увидите роли всех участников и будете нажимать «Далее».",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun RoomHeroCard(
+    state: HostSnapshot,
+    roomUrl: String?,
+    hostIp: String?,
+    onRefreshUrl: () -> Unit,
+    onCopy: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                "КОМНАТА",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.secondary,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                state.roomName,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                buildString {
+                    append("Игроков: ${state.players.size}")
+                    if (state.maxPlayers > 0) append(" из ${state.maxPlayers}")
+                    else append(" (без ограничения)")
+                    append(" • Пароль: ")
+                    append(if (state.hasPassword) "да" else "нет")
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            Spacer(Modifier.height(16.dp))
+
+            if (roomUrl != null) {
+                Text(
+                    "Откройте на iPhone в Safari:",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        roomUrl,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = { onCopy(roomUrl) }) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = "Скопировать")
+                    }
+                }
+                Text(
+                    "Android-игроки вводят этот адрес в «Подключиться».",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Wifi, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (hostIp == null) "Не вижу IP. Включите Wi-Fi или точку доступа."
+                        else "IP: $hostIp",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onRefreshUrl) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Обновить адрес")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WaitingCard(text: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(12.dp))
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun HostGame(
+    state: HostSnapshot,
+    onAdvance: () -> Unit,
+    onRestart: () -> Unit,
+    onClose: () -> Unit
+) {
+    var showLog by remember { mutableStateOf(false) }
+    val nightTitle = state.nightTitle
+    val nightBody = state.nightBody
+    val winner = state.winner
+    val vote = state.vote
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        MafiaTopBar(
+            title = state.roomName,
+            onBack = onClose,
+            actions = {
+                TextButton(onClick = onClose) {
+                    Icon(Icons.Filled.Close, contentDescription = "Закрыть")
+                }
+            }
+        )
+
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                PhaseCard(
+                    state = state,
+                    onAdvance = onAdvance,
+                    onRestart = onRestart
+                )
+            }
+
+            if (nightTitle != null) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(18.dp)) {
+                            Text(
+                                nightTitle,
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            if (!nightBody.isNullOrBlank()) {
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    nightBody,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (!state.actionProgress.isNullOrBlank()) {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    state.actionProgress,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (winner != null) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Text(
+                            winnerTitle(winner),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp)
+                        )
+                    }
+                }
+            }
+
+            item { SectionTitle("Роли игроков") }
+            items(state.players, key = { it.id }) { player ->
+                PlayerRow(player = player, showRole = true)
+            }
+
+            if (vote != null) {
+                item { VoteCard(vote, state.serverNow) }
+            }
+
+            if (state.events.isNotEmpty()) {
+                item { EventsCard(state.events) }
+            }
+
+            item {
+                TextButton(onClick = { showLog = !showLog }) {
+                    Text(if (showLog) "Скрыть журнал" else "Показать журнал")
+                }
+            }
+            if (showLog) {
+                item { EventsCard(state.log.takeLast(25)) }
+            }
+
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun PhaseCard(state: HostSnapshot, onAdvance: () -> Unit, onRestart: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                state.phaseLabel,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(6.dp))
+            CountdownLine(
+                endsAt = state.phaseEndsAt,
+                serverNow = state.serverNow,
+                label = "Осталось"
+            )
+            if (!state.actionProgress.isNullOrBlank() && state.phase != "night_step") {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    state.actionProgress,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            if (state.canAdvance) {
+                Button(
+                    onClick = onAdvance,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(state.advanceLabel)
+                }
+            }
+            if (state.canRestart) {
+                OutlinedButton(
+                    onClick = onRestart,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp),
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Icon(Icons.Filled.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Вернуться в лобби")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VoteCard(vote: VoteStatus, serverNow: Long) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                "Голосование",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (vote.voterName != null) "Сейчас голосует: ${vote.voterName}"
+                else "Голосование завершено",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            if (vote.total > 0) {
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { vote.done.toFloat() / vote.total.toFloat() },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Проголосовали: ${vote.done} из ${vote.total}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (vote.voterName != null) {
+                Spacer(Modifier.height(6.dp))
+                CountdownLine(vote.endsAt, serverNow, label = "На голос")
+            }
+        }
+    }
+}
+
+private fun winnerTitle(winner: String?): String = when (winner) {
+    "mafia" -> "🔴 Мафия победила!"
+    "maniac" -> "🔪 Маньяк победил!"
+    "jester" -> "🃏 Шут победил!"
+    "peaceful" -> "✅ Мирные победили!"
+    else -> "Игра окончена"
+}
+
+@Composable
+private fun KeepScreenOn() {
+    val context = LocalContext.current
+    DisposableEffect(Unit) {
+        val activity = context as? Activity
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+}

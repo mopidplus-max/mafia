@@ -1,0 +1,166 @@
+package com.danya.mafia.server
+
+import android.content.Context
+import com.danya.mafia.game.GameEngine
+import fi.iki.elonen.NanoHTTPD
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * HTTP-сервер комнаты.
+ * Android-игроки ходят в те же /api/*, что и веб-клиент для iOS.
+ */
+class GameServer(
+    private val context: Context,
+    private val engine: GameEngine,
+    port: Int = 8080
+) : NanoHTTPD(port) {
+
+    private val appContext = context.applicationContext
+
+    override fun serve(session: IHTTPSession): Response {
+        if (session.method == Method.OPTIONS) {
+            return cors(newFixedLengthResponse(Response.Status.NO_CONTENT, MIME_PLAINTEXT, ""))
+        }
+        return try {
+            when {
+                session.uri == "/" || session.uri == "/index.html" ->
+                    serveAsset("index.html")
+                session.uri.startsWith("/assets/") ->
+                    serveAsset(session.uri.removePrefix("/assets/"))
+                session.uri == "/api/room" ->
+                    cors(json(JSONObject().apply {
+                        put("ok", true)
+                        put("room", engine.roomInfo().toJson())
+                    }))
+                session.uri == "/api/join" ->
+                    handleJoin(session)
+                session.uri == "/api/leave" ->
+                    handleLeave(session)
+                session.uri == "/api/state" ->
+                    handleState(session)
+                session.uri == "/api/action" ->
+                    handleAction(session)
+                else -> cors(newFixedLengthResponse(
+                    Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found"
+                ))
+            }
+        } catch (e: Exception) {
+            cors(json(JSONObject().apply {
+                put("ok", false)
+                put("error", e.message ?: "Ошибка сервера")
+            }, Response.Status.INTERNAL_ERROR))
+        }
+    }
+
+    private fun serveAsset(name: String): Response {
+        val text = WebAssets.read(appContext, name)
+            ?: return cors(newFixedLengthResponse(
+                Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Asset not found"
+            ))
+        return cors(newFixedLengthResponse(
+            Response.Status.OK, WebAssets.mimeOf(name), text
+        ).also {
+            it.addHeader("Cache-Control", "no-cache")
+        })
+    }
+
+    private fun handleJoin(session: IHTTPSession): Response {
+        if (session.method != Method.POST) return badRequest("Нужен POST")
+        val body = readJson(session) ?: return badRequest("Пустой запрос")
+        val name = body.optString("name", "")
+        val device = body.optString("device", "web")
+        val password = if (body.has("password") && !body.isNull("password")) {
+            body.optString("password", "")
+        } else null
+
+        val result = engine.join(name, device, password)
+        val response = JSONObject().apply {
+            put("ok", result.ok)
+            if (result.ok) {
+                put("playerId", result.playerId)
+                put("token", result.token)
+                put("room", engine.roomInfo().toJson())
+            } else {
+                put("error", result.error ?: "Не удалось войти")
+            }
+        }
+        return cors(json(response))
+    }
+
+    private fun handleLeave(session: IHTTPSession): Response {
+        if (session.method != Method.POST) return badRequest("Нужен POST")
+        val body = readJson(session) ?: return badRequest("Пустой запрос")
+        val result = engine.leave(
+            body.optString("playerId", ""),
+            body.optString("token", "")
+        )
+        return cors(json(JSONObject().apply {
+            put("ok", result.ok)
+            if (!result.ok) put("error", result.error ?: "Не удалось")
+        }))
+    }
+
+    private fun handleState(session: IHTTPSession): Response {
+        val pid = session.parameters["pid"]?.firstOrNull()
+            ?: return notFound("Нет playerId")
+        val token = session.parameters["token"]?.firstOrNull()
+            ?: return notFound("Нет token")
+        val state = engine.clientState(pid, token)
+            ?: return notFound("Сессия не найдена")
+        return cors(json(state.toJson()))
+    }
+
+    private fun handleAction(session: IHTTPSession): Response {
+        if (session.method != Method.POST) return badRequest("Нужен POST")
+        val body = readJson(session) ?: return badRequest("Пустой запрос")
+        val pid = body.optString("playerId", "")
+        val token = body.optString("token", "")
+        val type = body.optString("type", "")
+        val targetId = if (body.has("targetId") && !body.isNull("targetId")) {
+            body.optString("targetId", "")
+        } else null
+        val targetIds = mutableListOf<String>()
+        val arr = body.optJSONArray("targetIds")
+        if (arr is JSONArray) {
+            for (i in 0 until arr.length()) targetIds += arr.optString(i, "")
+        }
+
+        val result = engine.handleAction(pid, token, type, targetId, targetIds)
+        return cors(json(JSONObject().apply {
+            put("ok", result.ok)
+            if (!result.ok) put("error", result.error ?: "Не удалось")
+        }))
+    }
+
+    private fun readJson(session: IHTTPSession): JSONObject? {
+        return try {
+            val files = HashMap<String, String>()
+            session.parseBody(files)
+            val raw = files["postData"] ?: ""
+            if (raw.isBlank()) null else JSONObject(raw)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun badRequest(message: String) = cors(json(
+        JSONObject().apply { put("ok", false); put("error", message) },
+        Response.Status.BAD_REQUEST
+    ))
+
+    private fun notFound(message: String) = cors(json(
+        JSONObject().apply { put("ok", false); put("error", message) },
+        Response.Status.NOT_FOUND
+    ))
+
+    private fun json(obj: JSONObject, status: Response.IStatus = Response.Status.OK) =
+        newFixedLengthResponse(status, "application/json; charset=utf-8", obj.toString())
+
+    private fun cors(response: Response): Response {
+        response.addHeader("Access-Control-Allow-Origin", "*")
+        response.addHeader("Access-Control-Allow-Headers", "Content-Type")
+        response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        return response
+    }
+}
