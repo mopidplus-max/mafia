@@ -4,6 +4,10 @@
   const app = document.getElementById('app');
   const SESSION_KEY = 'mafia_session_v1';
 
+  // На Vercel страница работает через реле: запросы уходят ведущему.
+  const RELAY = window.MAFIA_RELAY || null;
+  const relayCode = () => ((RELAY && RELAY.code) || '').trim().toUpperCase();
+
   const ua = navigator.userAgent || '';
   const isIOS = /iPad|iPhone|iPod/.test(ua) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -37,6 +41,7 @@
   // ─────────────────────────────────────────
 
   async function api(path, opts = {}) {
+    if (RELAY) return relayApi(path, opts);
     const headers = { Accept: 'application/json' };
     if (opts.body) headers['Content-Type'] = 'application/json; charset=utf-8';
     const response = await fetch(path, { ...opts, headers });
@@ -55,6 +60,59 @@
     return data;
   }
 
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Режим реле: ставим запрос в очередь ведущему и ждём ответ.
+   * Телефон ведущего сам опрашивает Vercel, поэтому белый IP не нужен.
+   */
+  async function relayApi(path, opts = {}) {
+    const code = relayCode();
+    if (!code) throw new Error('Сначала введите код комнаты');
+    const method = (opts.method || 'GET').toUpperCase();
+    const body = opts.body || '';
+
+    const enqueueResponse = await fetch('/api/relay/enqueue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      body: JSON.stringify({ code, method, path, body })
+    });
+    if (!enqueueResponse.ok) throw new Error('Реле недоступно');
+    const enqueued = await enqueueResponse.json();
+    if (!enqueued || !enqueued.id) throw new Error('Реле недоступно');
+
+    for (let i = 0; i < 26; i++) {
+      await sleep(500);
+      let response;
+      try {
+        response = await fetch('/api/relay/result?id=' + encodeURIComponent(enqueued.id));
+      } catch (_) {
+        continue;
+      }
+      if (!response.ok) continue;
+      const data = await response.json();
+      if (data.pending) continue;
+      const text = data.body || '';
+      let parsed = {};
+      if (text) {
+        try {
+          parsed = JSON.parse(text);
+        } catch (_) {
+          parsed = { error: text };
+        }
+      }
+      if (data.status >= 200 && data.status < 300) return parsed;
+      throw new Error(parsed.error || ('HTTP ' + data.status));
+    }
+    throw new Error('Ведущий не отвечает. Проверьте код комнаты.');
+  }
+
+  function originKey() {
+    return RELAY ? location.origin + '#relay:' + relayCode() : location.origin;
+  }
+
   function stateUrl() {
     return '/api/state?pid=' + encodeURIComponent(session.playerId) +
       '&token=' + encodeURIComponent(session.token);
@@ -71,7 +129,7 @@
       const raw = localStorage.getItem(SESSION_KEY);
       if (!raw) return null;
       const value = JSON.parse(raw);
-      if (!value || value.origin !== location.origin || !value.playerId || !value.token) return null;
+      if (!value || value.origin !== originKey() || !value.playerId || !value.token) return null;
       return value;
     } catch (_) {
       return null;
@@ -271,7 +329,7 @@
       });
       if (!data.ok) throw new Error(data.error || 'Не удалось войти');
       session = {
-        origin: location.origin,
+        origin: originKey(),
         playerId: data.playerId,
         token: data.token
       };
@@ -739,6 +797,16 @@
       event.preventDefault();
       join();
     }
+    if (event.target && event.target.id === 'relay-code-form') {
+      event.preventDefault();
+      const code = (document.getElementById('relay-code')?.value || '').trim().toUpperCase();
+      if (!code) return;
+      try {
+        localStorage.setItem('mafia_relay_code', code);
+      } catch (_) {}
+      if (RELAY) RELAY.code = code;
+      boot();
+    }
     if (event.target && event.target.id === 'chat-form') {
       event.preventDefault();
       const input = document.getElementById('chat-input');
@@ -867,6 +935,31 @@
       </div>`;
   }
 
+  function renderRelayCodePrompt() {
+    app.innerHTML = `
+      <div class="screen">
+        <div class="brand">
+          <div class="mask">🎭</div>
+          <h1>МАФИЯ</h1>
+          <p>Игра на расстоянии. Введите код комнаты, который дал ведущий.</p>
+        </div>
+        <form id="relay-code-form" class="card">
+          <label class="field">
+            <span>Код комнаты</span>
+            <input id="relay-code" maxlength="8" placeholder="Например, ABC123"
+              autocomplete="off" autocapitalize="characters" required>
+          </label>
+          <div style="height:16px"></div>
+          <button class="btn primary" type="submit">Войти в комнату</button>
+        </form>
+        <div class="hint center">Телефон ведущего должен быть онлайн.</div>
+      </div>`;
+  }
+
   setInterval(updateCountdowns, 250);
-  boot();
+  if (RELAY && !relayCode()) {
+    renderRelayCodePrompt();
+  } else {
+    boot();
+  }
 })();

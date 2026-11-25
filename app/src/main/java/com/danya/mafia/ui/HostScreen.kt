@@ -39,6 +39,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -65,12 +66,16 @@ fun HostScreen(
     state: HostSnapshot,
     roomUrl: String?,
     hostIp: String?,
+    relayUrl: String,
+    relayCode: String,
+    relayEnabled: Boolean,
     onStart: () -> Unit,
     onAdvance: () -> Unit,
     onRestart: () -> Unit,
     onClose: () -> Unit,
     onRefreshUrl: () -> Unit,
-    onToggleAutoHost: (Boolean) -> Unit
+    onToggleAutoHost: (Boolean) -> Unit,
+    onRelayChange: (String, String, Boolean) -> Unit
 ) {
     KeepScreenOn()
     var confirmClose by remember { mutableStateOf(false) }
@@ -81,10 +86,14 @@ fun HostScreen(
             state = state,
             roomUrl = roomUrl,
             hostIp = hostIp,
+            relayUrl = relayUrl,
+            relayCode = relayCode,
+            relayEnabled = relayEnabled,
             onStart = onStart,
             onClose = requestClose,
             onRefreshUrl = onRefreshUrl,
-            onToggleAutoHost = onToggleAutoHost
+            onToggleAutoHost = onToggleAutoHost,
+            onRelayChange = onRelayChange
         )
     } else {
         HostGame(
@@ -125,10 +134,14 @@ private fun HostLobby(
     state: HostSnapshot,
     roomUrl: String?,
     hostIp: String?,
+    relayUrl: String,
+    relayCode: String,
+    relayEnabled: Boolean,
     onStart: () -> Unit,
     onClose: () -> Unit,
     onRefreshUrl: () -> Unit,
-    onToggleAutoHost: (Boolean) -> Unit
+    onToggleAutoHost: (Boolean) -> Unit,
+    onRelayChange: (String, String, Boolean) -> Unit
 ) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
@@ -163,6 +176,15 @@ private fun HostLobby(
 
             item {
                 AutoHostRow(enabled = state.autoHost, onChange = onToggleAutoHost)
+            }
+
+            item {
+                RelayCard(
+                    url = relayUrl,
+                    code = relayCode,
+                    enabled = relayEnabled,
+                    onChange = onRelayChange
+                )
             }
 
             item { SectionTitle("Участники (${state.players.size})") }
@@ -591,6 +613,75 @@ private fun VoteCard(vote: VoteStatus, serverNow: Long) {
             if (vote.voterName != null) {
                 Spacer(Modifier.height(6.dp))
                 CountdownLine(vote.endsAt, serverNow, label = "На голос")
+            }
+        }
+    }
+}
+
+@Composable
+private fun RelayCard(
+    url: String,
+    code: String,
+    enabled: Boolean,
+    onChange: (String, String, Boolean) -> Unit
+) {
+    var urlValue by remember(url) { mutableStateOf(url) }
+    var codeValue by remember(code) { mutableStateOf(code) }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        "Игра на расстоянии",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        if (enabled) "Включено — игроки заходят через Vercel"
+                        else "Через Vercel, если все не в одной сети",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { onChange(urlValue, codeValue, it) }
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = urlValue,
+                onValueChange = { urlValue = it.take(200) },
+                label = { Text("Адрес реле") },
+                placeholder = { Text("https://mafia-relay.vercel.app") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = codeValue,
+                onValueChange = { value ->
+                    codeValue = value.uppercase()
+                        .filter { it.isLetterOrDigit() }
+                        .take(8)
+                },
+                label = { Text("Код комнаты") },
+                supportingText = { Text("Игроки вводят этот код на сайте реле") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (enabled) {
+                Spacer(Modifier.height(6.dp))
+                OutlinedButton(onClick = { onChange(urlValue, codeValue, true) }) {
+                    Text("Применить адрес и код")
+                }
             }
         }
     }

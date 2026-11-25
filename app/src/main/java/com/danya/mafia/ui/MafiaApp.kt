@@ -25,6 +25,9 @@ fun MafiaApp(vm: AppViewModel = viewModel()) {
     val error by vm.error.collectAsStateWithLifecycle()
     val roomUrl by vm.roomUrl.collectAsStateWithLifecycle()
     val hostIp by vm.hostIp.collectAsStateWithLifecycle()
+    val relayUrl by vm.relayUrl.collectAsStateWithLifecycle()
+    val relayCode by vm.relayCode.collectAsStateWithLifecycle()
+    val relayEnabled by vm.relayEnabled.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
 
@@ -66,12 +69,16 @@ fun MafiaApp(vm: AppViewModel = viewModel()) {
                             state = state,
                             roomUrl = roomUrl,
                             hostIp = hostIp,
+                            relayUrl = relayUrl,
+                            relayCode = relayCode,
+                            relayEnabled = relayEnabled,
                             onStart = vm::startHostGame,
                             onAdvance = vm::hostAdvance,
                             onRestart = vm::hostRestart,
                             onClose = vm::goHome,
                             onRefreshUrl = vm::refreshHostUrl,
-                            onToggleAutoHost = vm::setAutoHost
+                            onToggleAutoHost = vm::setAutoHost,
+                            onRelayChange = vm::setRelay
                         )
                     }
                 }
