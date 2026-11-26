@@ -83,6 +83,16 @@ enum class Role(
         "Обычный житель города. Участвует в обсуждении и голосовании. " +
             "Побеждает, когда уничтожены мафия и маньяк."
     ),
+    WATCHMAN(
+        "watchman", "Сторож", "🔦", Team.PEACEFUL,
+        "Ночью выбирает игрока и узнаёт, кто к нему приходил. " +
+            "Сам он никого не спасает и не убивает. Побеждает с мирными."
+    ),
+    AVENGER(
+        "avenger", "Мститель", "⚔️", Team.PEACEFUL,
+        "Если Мстителя убьют ночью, он забирает с собой случайного мафиози. " +
+            "Днём голосует как обычный мирный. Побеждает с мирными."
+    ),
     GUARDIAN(
         "guardian", "Ангел-Хранитель", "👼", Team.PEACEFUL,
         "Появляется после смерти с шансом 40%. Каждую ночь защищает одного игрока " +
@@ -97,12 +107,14 @@ enum class Role(
         /** Роли, которые ведущий может включить в комнате. */
         val selectable: List<Role> = listOf(
             MAFIA, DON, ADVOCATE, DOCTOR, COMMISSIONER, BEAUTY, MARTYR,
+            WATCHMAN, AVENGER,
             MAYOR, JESTER, WITCH, DRUGGIE, MANIAC, SNIPER, CIVILIAN
         )
 
         val defaultAllowed: Set<String> = setOf(
             MAFIA.id, DON.id, DOCTOR.id, COMMISSIONER.id, BEAUTY.id,
-            MARTYR.id, MANIAC.id, MAYOR.id, JESTER.id, CIVILIAN.id
+            MARTYR.id, WATCHMAN.id, AVENGER.id,
+            MANIAC.id, MAYOR.id, JESTER.id, CIVILIAN.id
         )
     }
 }

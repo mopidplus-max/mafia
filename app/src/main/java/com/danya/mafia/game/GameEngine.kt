@@ -82,6 +82,26 @@ class GameEngine(
         private const val AUTO_RESULT_MS = 6_000L
         private const val PISTOL_CHANCE = 0.20
         private const val GUARDIAN_CHANCE = 0.40
+        private const val CAT_CHANCE = 0.80
+
+        /** Звуки, которые ведущий может включить на телефонах игроков. */
+        val SOUND_KINDS = listOf("shot", "meow", "gong", "heart", "boom", "bell")
+        val SOUND_LABELS = mapOf(
+            "shot" to "Выстрел",
+            "meow" to "Мяу",
+            "gong" to "Гонг",
+            "heart" to "Сердце",
+            "boom" to "Взрыв",
+            "bell" to "Колокол"
+        )
+        val SOUND_ICONS = mapOf(
+            "shot" to "🔫",
+            "meow" to "🐱",
+            "gong" to "🔔",
+            "heart" to "💓",
+            "boom" to "💥",
+            "bell" to "🔕"
+        )
     }
 
     private val lock = Any()
@@ -111,6 +131,17 @@ class GameEngine(
     private var pistolSnoozedDay = 0
     private val guardians = mutableSetOf<String>()
     private val guardedIds = mutableSetOf<String>()
+
+    // ── Котость, звуки ведущего, сторож и мститель ──
+    private val catOwners = mutableSetOf<String>()
+    private val catBroken = mutableSetOf<String>()
+    private var catSeq = 0L
+    private var catEvent: CatEvent? = null
+    private var soundSeq = 0L
+    private var sound: SoundCommand? = null
+    private var watchTargetId: String? = null
+    private val visitLog = mutableMapOf<String, MutableSet<String>>()
+    private var avengerWasAlive = false
 
     // ── Автоведущий ──
     private var autoAdvanceAt: Long? = null
@@ -265,14 +296,34 @@ class GameEngine(
         pistolUsed = false
         pistolHolderId = null
         autoAdvanceAt = null
+        catOwners.clear()
+        catBroken.clear()
+        catEvent = null
+        sound = null
+        watchTargetId = null
+        visitLog.clear()
+        avengerWasAlive = false
+
+        // Котость: шанс 80% у каждого игрока. Спасает от первой смерти.
+        val catOwnersList = players.filter { Random.nextDouble() < CAT_CHANCE }
+        catOwnersList.forEach { catOwners += it.id }
+        if (catOwnersList.isNotEmpty()) {
+            addLog("Котость есть у: ${catOwnersList.joinToString { it.name }}")
+            catOwnersList.forEach { p ->
+                privateMessages[p.id] =
+                    "🐱 У вас есть Котость! Она спасёт вас от первой смерти, но треснет."
+            }
+        }
         if (Random.nextDouble() < PISTOL_CHANCE) {
             val holder = players
                 .filter { it.role?.team == Team.PEACEFUL }
                 .randomOrNull()
             if (holder != null) {
                 pistolHolderId = holder.id
-                privateMessages[holder.id] =
+                val pistolText =
                     "🔫 Вам подкинули пистолет. Один раз за игру можно убить любого игрока днём."
+                privateMessages[holder.id] =
+                    listOfNotNull(privateMessages[holder.id], pistolText).joinToString("\n\n")
                 addLog("Пистолет подкинули: ${holder.name}")
             }
         }
@@ -425,15 +476,21 @@ class GameEngine(
 
         sniperUsed = true
         if (target.role?.team == Team.MAFIA) {
-            target.alive = false
-            maybeGuardian(target)
-            events += "🎯 Снайпер выстрелил в ${target.name}. Это была мафия! Она погибла."
-            addLog("Снайпер убил ${target.name} (${target.role?.title})")
+            val died = tryKill(target, "снайпер")
+            events += if (died) {
+                "🎯 Снайпер выстрелил в ${target.name}. Это была мафия! Она погибла."
+            } else {
+                "🎯 Снайпер выстрелил в ${target.name}, но Котость спасла цель."
+            }
+            addLog("Снайпер выстрелил в ${target.name} (${target.role?.title})")
         } else {
-            sniper.alive = false
-            maybeGuardian(sniper)
-            events += "🎯 Снайпер выстрелил в ${target.name}, но попал в мирного. Снайпер погиб."
-            addLog("Снайпер промахнулся в ${target.name} и погиб")
+            val died = tryKill(sniper, "промах снайпера")
+            events += if (died) {
+                "🎯 Снайпер выстрелил в ${target.name}, но попал в мирного. Снайпер погиб."
+            } else {
+                "🎯 Снайпер промахнулся, но его спасла Котость."
+            }
+            addLog("Снайпер промахнулся в ${target.name}")
         }
         winner = checkWinner()
         if (winner != null) {
@@ -460,11 +517,14 @@ class GameEngine(
         if (target.id == p.id) return ActionResult(false, "Нельзя стрелять в себя")
 
         pistolUsed = true
-        target.alive = false
-        maybeGuardian(target)
-        events += "🔫 ${p.name} выстрелил в ${target.name}. " +
-            "Роль: ${target.role?.icon ?: ""} ${target.role?.title ?: "?"}."
-        addLog("${p.name} застрелил ${target.name} (${target.role?.title})")
+        val died = tryKill(target, "пистолет")
+        events += if (died) {
+            "🔫 ${p.name} выстрелил в ${target.name}. " +
+                "Роль: ${target.role?.icon ?: ""} ${target.role?.title ?: "?"}."
+        } else {
+            "🔫 ${p.name} выстрелил в ${target.name}, но его спасла Котость."
+        }
+        addLog("${p.name} выстрелил в ${target.name} (${target.role?.title})")
         winner = checkWinner()
         if (winner != null) gameOver()
         emit(now)
@@ -588,12 +648,16 @@ class GameEngine(
         witchEvent = null
         guardedIds.clear()
         nightQueue.clear()
+        watchTargetId = null
+        visitLog.clear()
+        avengerWasAlive = players.any { it.alive && it.role == Role.AVENGER }
 
         if (players.any { it.alive && it.role == Role.DRUGGIE }) nightQueue += Role.DRUGGIE
         if (players.any { it.alive && it.role == Role.BEAUTY }) nightQueue += Role.BEAUTY
         if (players.any { it.alive && it.role?.isMafia == true }) nightQueue += Role.MAFIA
         if (players.any { it.alive && it.role == Role.DOCTOR }) nightQueue += Role.DOCTOR
         if (players.any { it.alive && it.role == Role.COMMISSIONER }) nightQueue += Role.COMMISSIONER
+        if (players.any { it.alive && it.role == Role.WATCHMAN }) nightQueue += Role.WATCHMAN
         if (players.any { it.alive && it.role == Role.MARTYR }) nightQueue += Role.MARTYR
         if (guardians.isNotEmpty()) nightQueue += Role.GUARDIAN
         if (!witchUsed && players.any { it.alive && it.role == Role.WITCH }) nightQueue += Role.WITCH
@@ -761,6 +825,28 @@ class GameEngine(
                         title = "🔵 Просыпается Комиссар",
                         body = "Комиссар проверяет одного игрока. Дон мафии выглядит мирным.",
                         prompt = "Кого проверить?",
+                        canSkip = true,
+                        minTargets = 1,
+                        maxTargets = 1,
+                        now = now
+                    )
+                }
+            }
+            Role.WATCHMAN -> {
+                val actor = singleAlive(Role.WATCHMAN) ?: return null
+                if (actor.id in drugBlocked || actor.id in beautyBlocked) {
+                    blockedStep(role, actor, now)
+                } else {
+                    actionStep(
+                        role = role,
+                        kind = StepKind.ACTION,
+                        actors = listOf(actor),
+                        infoIds = setOf(actor.id),
+                        blocked = emptySet(),
+                        targets = alivePlayers().filter { it.id != actor.id },
+                        title = "🔦 Просыпается Сторож",
+                        body = "Сторож узнаёт, кто приходил к выбранному игроку этой ночью.",
+                        prompt = "За кем наблюдать?",
                         canSkip = true,
                         minTargets = 1,
                         maxTargets = 1,
@@ -987,6 +1073,10 @@ class GameEngine(
                     addLog("Смертник решил вернуть ${target.name} ценой своей жизни")
                 }
             }
+            Role.WATCHMAN -> {
+                watchTargetId = s.submissions.values.flatten().firstOrNull()
+                addLog("Сторож наблюдает за ${watchTargetId?.let { playerById(it)?.name } ?: "—"}")
+            }
             Role.GUARDIAN -> {
                 val chosen = s.submissions.values.flatten()
                     .filter { id -> playerById(id)?.alive == true }
@@ -1024,6 +1114,32 @@ class GameEngine(
             }
             else -> Unit
         }
+        recordVisits(s)
+    }
+
+    /**
+     * Запоминает, кто к кому приходил этой ночью — это нужно Сторожу.
+     * Пишем только фактическую цель роли, а не все голоса (мафия может
+     * голосовать за разных игроков, и это не должно утекать).
+     */
+    private fun recordVisits(s: NightStep) {
+        fun add(role: Role, targetId: String?) {
+            if (targetId == null) return
+            visitLog.getOrPut(targetId) { mutableSetOf() } += role.title
+        }
+        when (s.role) {
+            Role.MAFIA -> add(s.role, pendingMafiaTargetId)
+            Role.MANIAC -> add(s.role, pendingManiacTargetId)
+            Role.DOCTOR -> add(s.role, doctorTargetId)
+            Role.BEAUTY -> add(s.role, beautyTargetId)
+            Role.DRUGGIE -> add(s.role, drugTargetId)
+            Role.COMMISSIONER -> add(s.role, commissionerCheckedId)
+            Role.MARTYR -> add(s.role, martyrReviveId)
+            Role.WATCHMAN -> add(s.role, watchTargetId)
+            Role.GUARDIAN -> guardedIds.forEach { add(s.role, it) }
+            Role.WITCH -> s.submissions.values.flatten().distinct().forEach { add(s.role, it) }
+            else -> Unit
+        }
     }
 
     private fun finishNight(now: Long) {
@@ -1054,10 +1170,10 @@ class GameEngine(
                 mafiaTarget.id == doctorTargetId ->
                     events += "💚 Доктор спас ${mafiaTarget.name} от мафии."
                 mafiaTarget.alive -> {
-                    mafiaTarget.alive = false
-                    someoneDied = true
-                    events += "🔴 Мафия убила ${mafiaTarget.name}."
-                    maybeGuardian(mafiaTarget)
+                    if (tryKill(mafiaTarget, "мафия")) {
+                        someoneDied = true
+                        events += "🔴 Мафия убила ${mafiaTarget.name}."
+                    }
                 }
                 else -> events += "🔴 Мафия выбрала ${mafiaTarget.name}, но тот уже был мёртв."
             }
@@ -1073,11 +1189,44 @@ class GameEngine(
                 !maniacTarget.alive ->
                     events += "🔪 Маньяк тоже выбрал ${maniacTarget.name}, но тот уже был мёртв."
                 else -> {
-                    maniacTarget.alive = false
-                    someoneDied = true
-                    events += "🔪 Маньяк убил ${maniacTarget.name}."
-                    maybeGuardian(maniacTarget)
+                    if (tryKill(maniacTarget, "маньяк")) {
+                        someoneDied = true
+                        events += "🔪 Маньяк убил ${maniacTarget.name}."
+                    }
                 }
+            }
+        }
+
+        // Мститель: если его убили ночью — забирает с собой случайного мафиози.
+        val avenger = players.firstOrNull { it.role == Role.AVENGER }
+        if (avenger != null && avengerWasAlive && !avenger.alive) {
+            val victim = players
+                .filter { it.alive && it.role?.team == Team.MAFIA }
+                .randomOrNull()
+            if (victim == null) {
+                events += "⚔️ Мститель погиб, но отомстить было некому."
+            } else if (tryKill(victim, "месть мстителя")) {
+                someoneDied = true
+                events += "⚔️ Мститель погиб и забрал с собой ${victim.name}."
+                addLog("Мститель ${avenger.name} забрал ${victim.name} (${victim.role?.title})")
+            } else {
+                events += "⚔️ Мститель погиб, но котость спасла его убийцу."
+            }
+        }
+
+        // Сторож: кто приходил к его цели.
+        if (watchTargetId != null) {
+            val watchman = players.firstOrNull { it.role == Role.WATCHMAN }
+            val watched = playerById(watchTargetId!!)
+            if (watchman != null && watched != null) {
+                val guests = visitLog[watched.id].orEmpty()
+                    .filter { it != Role.WATCHMAN.title }
+                privateMessages[watchman.id] = if (guests.isEmpty()) {
+                    "🔦 К ${watched.name} этой ночью никто не приходил."
+                } else {
+                    "🔦 К ${watched.name} приходили: ${guests.joinToString()}."
+                }
+                events += "🔦 Сторож сделал обход."
             }
         }
 
@@ -1206,15 +1355,18 @@ class GameEngine(
         if (leaders.size == 1) {
             val eliminated = playerById(leaders[0])
             if (eliminated != null) {
-                eliminated.alive = false
-                events += "🗳️ ${eliminated.name} исключён из игры."
-                events += "Его роль: ${eliminated.role?.icon ?: ""} ${eliminated.role?.title ?: "?"}."
-                addLog("Исключён ${eliminated.name} (${eliminated.role?.title})")
-                if (eliminated.role == Role.JESTER) {
-                    jesterWon = true
-                    events += "🃏 Это был Шут! Шут добился своего и побеждает!"
+                val died = tryKill(eliminated, "голосование")
+                if (died) {
+                    events += "🗳️ ${eliminated.name} исключён из игры."
+                    events += "Его роль: ${eliminated.role?.icon ?: ""} ${eliminated.role?.title ?: "?"}."
+                    addLog("Исключён ${eliminated.name} (${eliminated.role?.title})")
+                    if (eliminated.role == Role.JESTER) {
+                        jesterWon = true
+                        events += "🃏 Это был Шут! Шут добился своего и побеждает!"
+                    }
                 } else {
-                    maybeGuardian(eliminated)
+                    events += "🗳️ Голосование против ${eliminated.name} провалилось."
+                    addLog("Котость спасла ${eliminated.name} от изгнания")
                 }
             }
         } else {
@@ -1283,6 +1435,12 @@ class GameEngine(
         pistolSnoozedDay = 0
         martyrReviveId = null
         autoAdvanceAt = null
+        catOwners.clear()
+        catBroken.clear()
+        catEvent = null
+        sound = null
+        watchTargetId = null
+        visitLog.clear()
         events = mutableListOf("↩️ Комната вернулась в лобби")
         addLog("Ведущий вернул комнату в лобби")
         emit()
@@ -1296,6 +1454,9 @@ class GameEngine(
     fun sendChat(playerId: String, token: String, textRaw: String): ActionResult = synchronized(lock) {
         val p = auth(playerId, token)
             ?: return@synchronized ActionResult(false, "Сессия не найдена")
+        if (!mafiaChatAllowed(p)) {
+            return@synchronized ActionResult(false, "Чат доступен только мафии")
+        }
         val text = textRaw.trim().replace("\n", " ").take(300)
         if (text.isBlank()) return@synchronized ActionResult(false, "Пустое сообщение")
         val now = System.currentTimeMillis()
@@ -1310,6 +1471,25 @@ class GameEngine(
         )
         if (chat.size > 200) chat.removeAt(0)
         emit(now)
+        ActionResult(true)
+    }
+
+    /** Чат — только для мафии (и Адвоката, который знает мафию). */
+    private fun mafiaChatAllowed(p: GamePlayer): Boolean =
+        p.role?.team == Team.MAFIA || p.role == Role.ADVOCATE
+
+    // ── Звуки ведущего ──
+
+    fun playSound(kind: String, targetPlayerId: String?): ActionResult = synchronized(lock) {
+        if (kind !in SOUND_KINDS) return@synchronized ActionResult(false, "Неизвестный звук")
+        val target = if (targetPlayerId.isNullOrBlank()) null else playerById(targetPlayerId)
+        if (!targetPlayerId.isNullOrBlank() && target == null) {
+            return@synchronized ActionResult(false, "Игрок не найден")
+        }
+        soundSeq += 1
+        sound = SoundCommand(seq = soundSeq, kind = kind, targetId = target?.id)
+        addLog("Звук ${SOUND_LABELS[kind]} → ${target?.name ?: "все устройства"}")
+        emit()
         ActionResult(true)
     }
 
@@ -1333,6 +1513,25 @@ class GameEngine(
         )
         emit(now)
         ActionResult(true)
+    }
+
+    /**
+     * Убивает игрока с учётом Котости.
+     * Возвращает true, если игрок действительно погиб.
+     */
+    private fun tryKill(target: GamePlayer, cause: String): Boolean {
+        if (!target.alive) return false
+        if (target.id in catOwners && target.id !in catBroken) {
+            catBroken += target.id
+            catSeq += 1
+            catEvent = CatEvent(seq = catSeq, playerId = target.id, playerName = target.name)
+            events += "🐱 Котость защитила ${target.name}."
+            addLog("Котость спасла ${target.name} ($cause)")
+            return false
+        }
+        target.alive = false
+        maybeGuardian(target)
+        return true
     }
 
     /** Шанс стать Ангелом-Хранителем после смерти. */
@@ -1405,7 +1604,9 @@ class GameEngine(
                 roleTeam = p.role?.team?.name?.lowercase(),
                 isYou = false,
                 left = p.left,
-                guardian = p.id in guardians
+                guardian = p.id in guardians,
+                cat = p.id in catOwners,
+                catBroken = p.id in catBroken
             )
         }
 
@@ -1496,7 +1697,9 @@ class GameEngine(
                 roleTeam = if (show) other.role?.team?.name?.lowercase() else null,
                 isYou = other.id == viewer.id,
                 left = other.left,
-                guardian = other.id in guardians
+                guardian = other.id in guardians,
+                cat = other.id in catOwners,
+                catBroken = other.id in catBroken
             )
         }
 
@@ -1525,7 +1728,10 @@ class GameEngine(
             rolesRevealed = rolesRevealed,
             nightRoleTitle = s?.role?.title,
             nightRoleIcon = s?.role?.icon,
-            chat = chat.toList()
+            chat = if (mafiaChatAllowed(viewer)) chat.toList() else emptyList(),
+            canChat = mafiaChatAllowed(viewer),
+            sound = sound?.takeIf { it.targetId == null || it.targetId == viewer.id },
+            catSave = catEvent
         )
     }
 

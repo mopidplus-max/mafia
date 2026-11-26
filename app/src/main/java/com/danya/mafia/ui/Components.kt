@@ -1,6 +1,9 @@
 package com.danya.mafia.ui
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -49,7 +53,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -166,6 +175,57 @@ fun StatusBanner(text: String, error: Boolean = false, modifier: Modifier = Modi
 }
 
 @Composable
+fun CatBadge(broken: Boolean, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val bitmap = remember {
+        runCatching {
+            context.assets.open("web/cat-small.png").use { BitmapFactory.decodeStream(it) }
+        }.getOrNull()
+    }
+    val image = remember(bitmap) { bitmap?.asImageBitmap() }
+    val grayscale = remember {
+        ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
+    }
+
+    Box(modifier = modifier.size(24.dp), contentAlignment = Alignment.Center) {
+        if (image != null) {
+            Image(
+                bitmap = image,
+                contentDescription = if (broken) "Котость треснула" else "Котость",
+                colorFilter = if (broken) grayscale else null,
+                alpha = if (broken) 0.55f else 1f,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Text(if (broken) "💔" else "🐱", fontSize = 16.sp)
+        }
+        if (broken) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val stroke = 1.3.dp.toPx()
+                drawLine(
+                    color = Color(0xFFE7C365),
+                    start = Offset(size.width * 0.12f, size.height * 0.88f),
+                    end = Offset(size.width * 0.46f, size.height * 0.52f),
+                    strokeWidth = stroke
+                )
+                drawLine(
+                    color = Color(0xFFE7C365),
+                    start = Offset(size.width * 0.46f, size.height * 0.52f),
+                    end = Offset(size.width * 0.86f, size.height * 0.28f),
+                    strokeWidth = stroke
+                )
+                drawLine(
+                    color = Color(0xFFE7C365),
+                    start = Offset(size.width * 0.46f, size.height * 0.52f),
+                    end = Offset(size.width * 0.38f, size.height * 0.94f),
+                    strokeWidth = stroke
+                )
+            }
+        }
+    }
+}
+
+@Composable
 fun PlayerRow(
     player: PlayerView,
     showRole: Boolean = player.roleTitle != null,
@@ -215,6 +275,10 @@ fun PlayerRow(
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )
                         }
+                    }
+                    if (player.cat) {
+                        Spacer(Modifier.width(6.dp))
+                        CatBadge(broken = player.catBroken)
                     }
                 }
                 if (player.guardian) {

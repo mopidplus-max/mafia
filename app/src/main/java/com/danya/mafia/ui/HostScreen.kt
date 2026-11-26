@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -21,6 +22,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -33,6 +35,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.danya.mafia.game.ChatMessage
+import com.danya.mafia.game.GameEngine
 import com.danya.mafia.game.HostSnapshot
 import com.danya.mafia.game.PlayerActivity
 import com.danya.mafia.game.PlayerView
@@ -75,7 +79,8 @@ fun HostScreen(
     onClose: () -> Unit,
     onRefreshUrl: () -> Unit,
     onToggleAutoHost: (Boolean) -> Unit,
-    onRelayChange: (String, String, Boolean) -> Unit
+    onRelayChange: (String, String, Boolean) -> Unit,
+    onPlaySound: (String, String?) -> Unit
 ) {
     KeepScreenOn()
     var confirmClose by remember { mutableStateOf(false) }
@@ -102,7 +107,8 @@ fun HostScreen(
             onAdvance = onAdvance,
             onRestart = onRestart,
             onClose = requestClose,
-            onToggleAutoHost = onToggleAutoHost
+            onToggleAutoHost = onToggleAutoHost,
+            onPlaySound = onPlaySound
         )
     }
 
@@ -366,7 +372,8 @@ private fun HostGame(
     onAdvance: () -> Unit,
     onRestart: () -> Unit,
     onClose: () -> Unit,
-    onToggleAutoHost: (Boolean) -> Unit
+    onToggleAutoHost: (Boolean) -> Unit,
+    onPlaySound: (String, String?) -> Unit
 ) {
     val context = LocalContext.current
     var showLog by remember { mutableStateOf(false) }
@@ -406,6 +413,10 @@ private fun HostGame(
 
             item {
                 AutoHostRow(enabled = state.autoHost, onChange = onToggleAutoHost)
+            }
+
+            item {
+                SoundCard(players = state.players, onPlay = onPlaySound)
             }
 
             if (nightTitle != null) {
@@ -688,6 +699,77 @@ private fun RelayCard(
 }
 
 @Composable
+private fun SoundCard(players: List<PlayerView>, onPlay: (String, String?) -> Unit) {
+    var targetId by remember { mutableStateOf<String?>(null) }
+    val devices = players.filter { !it.left }
+    val targetName = devices.firstOrNull { it.id == targetId }?.name
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                "🔊 Звук на телефонах",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                if (targetName == null) "Прозвучит на всех устройствах"
+                else "Прозвучит только у $targetName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = targetId == null,
+                    onClick = { targetId = null },
+                    label = { Text("Все") }
+                )
+                devices.forEach { p ->
+                    FilterChip(
+                        selected = targetId == p.id,
+                        onClick = { targetId = p.id },
+                        label = { Text(p.name) }
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            GameEngine.SOUND_KINDS.chunked(3).forEach { row ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    row.forEach { kind ->
+                        OutlinedButton(
+                            onClick = { onPlay(kind, targetId) },
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                "${GameEngine.SOUND_ICONS[kind] ?: ""} ${GameEngine.SOUND_LABELS[kind] ?: kind}",
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AutoHostRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -768,7 +850,6 @@ private fun ActivityCard(activity: List<PlayerActivity>) {
 
 @Composable
 private fun ChatCard(chat: List<ChatMessage>) {
-    if (chat.isEmpty()) return
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -778,11 +859,24 @@ private fun ChatCard(chat: List<ChatMessage>) {
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
             Text(
-                "💬 Чат",
+                "💬 Чат мафии",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Пишут только мафия и Адвокат. Остальные игроки этого не видят.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(8.dp))
+            if (chat.isEmpty()) {
+                Text(
+                    "Пока тихо.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             chat.takeLast(14).forEach { m ->
                 Text(
                     buildString {

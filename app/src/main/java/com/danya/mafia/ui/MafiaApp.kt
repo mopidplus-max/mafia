@@ -78,7 +78,8 @@ fun MafiaApp(vm: AppViewModel = viewModel()) {
                             onClose = vm::goHome,
                             onRefreshUrl = vm::refreshHostUrl,
                             onToggleAutoHost = vm::setAutoHost,
-                            onRelayChange = vm::setRelay
+                            onRelayChange = vm::setRelay,
+                            onPlaySound = vm::playSound
                         )
                     }
                 }

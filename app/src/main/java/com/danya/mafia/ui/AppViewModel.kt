@@ -160,6 +160,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         host?.engine?.setAutoHost(enabled)
     }
 
+    fun playSound(kind: String, targetId: String?) {
+        val result = host?.engine?.playSound(kind, targetId)
+        if (result != null && !result.ok) _error.value = result.error
+    }
+
     fun refreshHostUrl() {
         val ip = LocalNetwork.ipv4()
         _hostIp.value = ip

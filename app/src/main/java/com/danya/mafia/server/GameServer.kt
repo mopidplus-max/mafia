@@ -58,15 +58,22 @@ class GameServer(
     }
 
     private fun serveAsset(name: String): Response {
-        val text = WebAssets.read(appContext, name)
+        val bytes = WebAssets.readBytes(appContext, name)
             ?: return cors(newFixedLengthResponse(
                 Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Asset not found"
             ))
-        return cors(newFixedLengthResponse(
-            Response.Status.OK, WebAssets.mimeOf(name), text
-        ).also {
-            it.addHeader("Cache-Control", "no-cache")
-        })
+        val mime = WebAssets.mimeOf(name)
+        val binary = WebAssets.isBinary(name)
+        val response = if (binary) {
+            newFixedLengthResponse(
+                Response.Status.OK, mime,
+                java.io.ByteArrayInputStream(bytes), bytes.size.toLong()
+            )
+        } else {
+            newFixedLengthResponse(Response.Status.OK, mime, String(bytes, Charsets.UTF_8))
+        }
+        val cache = if (binary) "public, max-age=86400" else "no-cache"
+        return cors(response.also { it.addHeader("Cache-Control", cache) })
     }
 
     private fun handleJoin(session: IHTTPSession): Response {

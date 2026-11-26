@@ -49,7 +49,9 @@ data class PlayerView(
     val roleTeam: String? = null,
     val isYou: Boolean = false,
     val left: Boolean = false,
-    val guardian: Boolean = false
+    val guardian: Boolean = false,
+    val cat: Boolean = false,
+    val catBroken: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -59,6 +61,8 @@ data class PlayerView(
         put("isYou", isYou)
         put("left", left)
         put("guardian", guardian)
+        put("cat", cat)
+        put("catBroken", catBroken)
         if (roleId != null) put("roleId", roleId)
         if (roleTitle != null) put("roleTitle", roleTitle)
         if (roleIcon != null) put("roleIcon", roleIcon)
@@ -79,7 +83,51 @@ data class PlayerView(
             roleTeam = o.nullableString("roleTeam"),
             isYou = o.optBoolean("isYou"),
             left = o.optBoolean("left"),
-            guardian = o.optBoolean("guardian")
+            guardian = o.optBoolean("guardian"),
+            cat = o.optBoolean("cat"),
+            catBroken = o.optBoolean("catBroken")
+        )
+    }
+}
+
+/** Звук, который ведущий включает на телефонах игроков. */
+data class SoundCommand(
+    val seq: Long,
+    val kind: String,
+    val targetId: String? = null
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("seq", seq)
+        put("kind", kind)
+        if (targetId != null) put("targetId", targetId)
+    }
+
+    companion object {
+        fun fromJson(o: JSONObject) = SoundCommand(
+            seq = o.optLong("seq"),
+            kind = o.optString("kind"),
+            targetId = o.nullableString("targetId")
+        )
+    }
+}
+
+/** Котость спасла игрока — на всех экранах показываем анимацию. */
+data class CatEvent(
+    val seq: Long,
+    val playerId: String,
+    val playerName: String
+) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("seq", seq)
+        put("playerId", playerId)
+        put("playerName", playerName)
+    }
+
+    companion object {
+        fun fromJson(o: JSONObject) = CatEvent(
+            seq = o.optLong("seq"),
+            playerId = o.optString("playerId"),
+            playerName = o.optString("playerName")
         )
     }
 }
@@ -239,7 +287,10 @@ data class ClientState(
     val rolesRevealed: Boolean = false,
     val nightRoleTitle: String? = null,
     val nightRoleIcon: String? = null,
-    val chat: List<ChatMessage> = emptyList()
+    val chat: List<ChatMessage> = emptyList(),
+    val canChat: Boolean = false,
+    val sound: SoundCommand? = null,
+    val catSave: CatEvent? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("roomName", roomName)
@@ -253,7 +304,10 @@ data class ClientState(
         put("serverNow", serverNow)
         put("message", message)
         put("rolesRevealed", rolesRevealed)
+        put("canChat", canChat)
         put("chat", JSONArray().apply { chat.forEach { put(it.toJson()) } })
+        if (sound != null) put("sound", sound.toJson())
+        if (catSave != null) put("catSave", catSave.toJson())
         if (startAt != null) put("startAt", startAt)
         if (phaseEndsAt != null) put("phaseEndsAt", phaseEndsAt)
         if (prompt != null) put("prompt", prompt.toJson())
@@ -297,7 +351,10 @@ data class ClientState(
                 rolesRevealed = o.optBoolean("rolesRevealed"),
                 nightRoleTitle = o.nullableString("nightRoleTitle"),
                 nightRoleIcon = o.nullableString("nightRoleIcon"),
-                chat = chat
+                chat = chat,
+                canChat = o.optBoolean("canChat"),
+                sound = o.optJSONObject("sound")?.let(SoundCommand::fromJson),
+                catSave = o.optJSONObject("catSave")?.let(CatEvent::fromJson)
             )
         }
     }
