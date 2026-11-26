@@ -890,7 +890,36 @@ private fun watchUrl(roomUrl: String?, preview: PlayerPreview): String {
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun PlayerWebScreen(url: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
     var progress by remember(url) { mutableStateOf(0) }
+    val webView = remember {
+        WebView(context).apply {
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.loadWithOverviewMode = false
+            settings.useWideViewPort = false
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                    progress = newProgress
+                }
+            }
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    progress = 100
+                }
+            }
+            loadUrl(url)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            webView.stopLoading()
+            webView.loadUrl("about:blank")
+            webView.destroy()
+        }
+    }
     Column(modifier = modifier.fillMaxSize()) {
         if (progress < 100) {
             LinearProgressIndicator(
@@ -903,27 +932,7 @@ private fun PlayerWebScreen(url: String, modifier: Modifier = Modifier) {
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
-            factory = { context ->
-                WebView(context).apply {
-                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    settings.loadWithOverviewMode = false
-                    settings.useWideViewPort = false
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                            progress = newProgress
-                        }
-                    }
-                    webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            progress = 100
-                        }
-                    }
-                    loadUrl(url)
-                }
-            },
+            factory = { webView },
             update = { view ->
                 if (view.url != url) view.loadUrl(url)
             }

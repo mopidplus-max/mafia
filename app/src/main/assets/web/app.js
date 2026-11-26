@@ -47,6 +47,10 @@
   let lastSoundSeq = 0;
   let lastCatSeq = 0;
   let roleCinemaShown = false;
+  let mp3Player = null;
+  let mp3Unlocked = false;
+  // Короткая тишина: разблокирует <audio> на iPhone после первого касания.
+  const SILENT_WAV = 'data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA';
 
   // ─────────────────────────────────────────
   //  API
@@ -880,7 +884,10 @@
     return audioCtx;
   }
 
-  document.addEventListener('pointerdown', () => { ensureAudio(); }, { passive: true });
+  document.addEventListener('pointerdown', () => {
+    ensureAudio();
+    unlockMp3();
+  }, { passive: true });
 
   function noise(ctx, seconds) {
     const length = Math.max(1, Math.floor(ctx.sampleRate * seconds));
@@ -1019,15 +1026,41 @@
   function playSoundCommand(sound) {
     if (!sound) return;
     if (sound.src) {
-      try {
-        const audio = new Audio(sound.src);
-        audio.play().catch(() => showAudioHint());
-      } catch (_) {
-        showAudioHint();
-      }
+      playMp3(sound.src);
       return;
     }
     playSoundKind(sound.kind);
+  }
+
+  function ensureMp3Player() {
+    if (!mp3Player) {
+      mp3Player = new Audio();
+      mp3Player.preload = 'auto';
+    }
+    return mp3Player;
+  }
+
+  function unlockMp3() {
+    if (mp3Unlocked) return;
+    try {
+      const el = ensureMp3Player();
+      el.src = SILENT_WAV;
+      el.play().then(() => {
+        el.pause();
+        el.currentTime = 0;
+        mp3Unlocked = true;
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
+  function playMp3(src) {
+    try {
+      const el = ensureMp3Player();
+      el.src = src;
+      el.play().catch(() => showAudioHint());
+    } catch (_) {
+      showAudioHint();
+    }
   }
 
   function showAudioHint() {
@@ -1039,6 +1072,7 @@
     hint.textContent = '🔊 Нажмите, чтобы включить звук';
     hint.addEventListener('click', () => {
       ensureAudio();
+      unlockMp3();
       hint.remove();
     });
     document.body.appendChild(hint);
