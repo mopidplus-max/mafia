@@ -30,7 +30,7 @@ class GameServer(
                 session.uri.startsWith("/assets/") ->
                     serveAsset(session.uri.removePrefix("/assets/"))
                 session.uri.startsWith("/media/") ->
-                    serveMedia(session.uri.removePrefix("/media/"))
+                    serveMedia(session)
                 session.uri == "/api/room" ->
                     cors(json(JSONObject().apply {
                         put("ok", true)
@@ -79,19 +79,57 @@ class GameServer(
         return cors(response.also { it.addHeader("Cache-Control", cache) })
     }
 
-    private fun serveMedia(id: String): Response {
+    private fun serveMedia(session: IHTTPSession): Response {
+        val id = session.uri.removePrefix("/media/")
         val track = media.get(id)
             ?: return cors(newFixedLengthResponse(
                 Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Sound not found"
             ))
-        val response = newFixedLengthResponse(
-            Response.Status.OK,
-            track.info.mime,
-            java.io.ByteArrayInputStream(track.bytes),
-            track.bytes.size.toLong()
-        )
+        val bytes = track.bytes
+        val total = bytes.size.toLong()
+        val range = parseRange(session.headers["range"], total)
+        val response = if (range != null) {
+            val (start, end) = range
+            val length = (end - start + 1).toInt()
+            newFixedLengthResponse(
+                Response.Status.PARTIAL_CONTENT,
+                track.info.mime,
+                java.io.ByteArrayInputStream(bytes, start.toInt(), length),
+                length.toLong()
+            ).also {
+                it.addHeader("Content-Range", "bytes $start-$end/$total")
+            }
+        } else {
+            newFixedLengthResponse(
+                Response.Status.OK,
+                track.info.mime,
+                java.io.ByteArrayInputStream(bytes),
+                total
+            )
+        }
+        response.addHeader("Accept-Ranges", "bytes")
         response.addHeader("Cache-Control", "no-cache")
         return cors(response)
+    }
+
+    /** Простой Range: нужен, чтобы mp3 играл в Safari на iPhone. */
+    private fun parseRange(header: String?, total: Long): Pair<Long, Long>? {
+        if (header.isNullOrBlank() || total <= 0) return null
+        if (!header.startsWith("bytes=")) return null
+        val spec = header.removePrefix("bytes=").substringBefore(',').trim()
+        val parts = spec.split('-', limit = 2)
+        if (parts.size != 2) return null
+        val start = parts[0].trim().toLongOrNull()
+        val end = parts[1].trim().toLongOrNull()
+        if (start == null && end == null) return null
+        if (start == null) {
+            val suffix = (end ?: return null).coerceAtLeast(1)
+            val from = (total - suffix).coerceAtLeast(0)
+            return from to (total - 1)
+        }
+        val from = start.coerceIn(0, total - 1)
+        val endPos = (end ?: (total - 1)).coerceIn(from, total - 1)
+        return from to endPos
     }
 
     private fun handleJoin(session: IHTTPSession): Response {
