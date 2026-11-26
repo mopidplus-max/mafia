@@ -4,6 +4,13 @@
   const app = document.getElementById('app');
   const SESSION_KEY = 'mafia_session_v1';
 
+  // Режим просмотра для ведущего: страница открыта как экран игрока,
+  // без права нажимать кнопки и без записи в localStorage.
+  const watchParams = new URLSearchParams(location.search);
+  const WATCH = watchParams.get('watch') === '1'
+    ? { pid: watchParams.get('pid') || '', token: watchParams.get('token') || '' }
+    : null;
+
   // Прогреваем картинку котости, чтобы полноэкранная анимация открылась сразу.
   try { new Image().src = '/assets/cat.png'; } catch (_) {}
 
@@ -74,6 +81,7 @@
   }
 
   function saveSession(value) {
+    if (WATCH) return;
     try {
       localStorage.setItem(SESSION_KEY, JSON.stringify(value));
     } catch (_) {}
@@ -92,6 +100,7 @@
   }
 
   function clearSession() {
+    if (WATCH) return;
     try {
       localStorage.removeItem(SESSION_KEY);
     } catch (_) {}
@@ -104,6 +113,20 @@
   async function boot() {
     joinError = '';
     actionError = '';
+    if (WATCH) {
+      if (!WATCH.pid || !WATCH.token) {
+        fatal('Нет данных для просмотра');
+        return;
+      }
+      session = { playerId: WATCH.pid, token: WATCH.token, name: 'watch' };
+      try {
+        const snapshot = await api(stateUrl());
+        enterGame(snapshot);
+      } catch (e) {
+        fatal('Экран недоступен: ' + (e.message || 'сессия истекла'));
+      }
+      return;
+    }
     try {
       const data = await api('/api/room');
       roomInfo = data.room;
@@ -157,6 +180,7 @@
 
   function startActivityReporting() {
     stopActivityReporting();
+    if (WATCH) return;
     activityTimer = setInterval(reportActivity, 3000);
   }
 
@@ -188,6 +212,12 @@
     } catch (e) {
       const message = e.message || '';
       if (message.includes('Сессия') || message.includes('404')) {
+        if (WATCH) {
+          stopPolling();
+          stopActivityReporting();
+          fatal('Сессия игрока завершена');
+          return;
+        }
         clearSession();
         session = null;
         state = null;
@@ -779,6 +809,10 @@
   // ─────────────────────────────────────────
 
   document.addEventListener('submit', event => {
+    if (WATCH) {
+      event.preventDefault();
+      return;
+    }
     if (event.target && event.target.id === 'join-form') {
       event.preventDefault();
       join();
@@ -794,6 +828,7 @@
   });
 
   document.addEventListener('click', event => {
+    if (WATCH) return;
     const targetElement = event.target.closest('[data-target]');
     if (targetElement && state?.prompt) {
       const prompt = state.prompt;
@@ -972,11 +1007,41 @@
   };
 
   function playSoundKind(kind) {
+    if (WATCH) return;
     const player = SOUNDS[kind];
     if (!player) return;
     try {
       player();
     } catch (_) {}
+  }
+
+  /** Играет звук от ведущего: встроенный синтез или загруженный mp3. */
+  function playSoundCommand(sound) {
+    if (!sound) return;
+    if (sound.src) {
+      try {
+        const audio = new Audio(sound.src);
+        audio.play().catch(() => showAudioHint());
+      } catch (_) {
+        showAudioHint();
+      }
+      return;
+    }
+    playSoundKind(sound.kind);
+  }
+
+  function showAudioHint() {
+    if (document.getElementById('audio-hint')) return;
+    const hint = document.createElement('button');
+    hint.id = 'audio-hint';
+    hint.type = 'button';
+    hint.className = 'audio-hint';
+    hint.textContent = '🔊 Нажмите, чтобы включить звук';
+    hint.addEventListener('click', () => {
+      ensureAudio();
+      hint.remove();
+    });
+    document.body.appendChild(hint);
   }
 
   // ─────────────────────────────────────────
@@ -988,9 +1053,9 @@
     if (snapshot.phase === 'lobby') {
       roleCinemaShown = false;
     }
-    if (snapshot.sound && snapshot.sound.seq > lastSoundSeq) {
+    if (!WATCH && snapshot.sound && snapshot.sound.seq > lastSoundSeq) {
       lastSoundSeq = snapshot.sound.seq;
-      playSoundKind(snapshot.sound.kind);
+      playSoundCommand(snapshot.sound);
     }
     if (snapshot.catSave && snapshot.catSave.seq > lastCatSeq) {
       lastCatSeq = snapshot.catSave.seq;

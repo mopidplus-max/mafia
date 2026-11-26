@@ -51,6 +51,7 @@ fun CreateRoomScreen(
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var maxPlayers by rememberSaveable { mutableStateOf("0") }
     var autoHost by rememberSaveable { mutableStateOf(true) }
+    var catEnabled by rememberSaveable { mutableStateOf(true) }
     var selectedRoles by remember { mutableStateOf(Role.defaultAllowed) }
 
     val maxValue = maxPlayers.toIntOrNull()
@@ -123,6 +124,19 @@ fun CreateRoomScreen(
             )
 
             Spacer(Modifier.height(22.dp))
+            RowSwitch(
+                title = "Котость",
+                checked = catEnabled,
+                onCheckedChange = { catEnabled = it }
+            )
+            Text(
+                "Если выключить, ни у кого не будет котости и никто не получит " +
+                    "защиту от мафии.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(22.dp))
             SectionTitle("Какие роли могут быть?")
             Text(
                 "Роли выбираются случайно из отмеченных. Мафия добавляется всегда.",
@@ -183,7 +197,8 @@ fun CreateRoomScreen(
                             password = if (usePassword) password else null,
                             allowedRoles = selectedRoles,
                             maxPlayers = maxValue ?: 0,
-                            autoHost = autoHost
+                            autoHost = autoHost,
+                            catEnabled = catEnabled
                         )
                     )
                 },

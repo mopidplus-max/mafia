@@ -954,3 +954,22 @@ body.night {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Кнопка разблокировки звука, если браузер не дал автозапуск */
+.audio-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  transform: translateX(-50%);
+  z-index: 80;
+  border: none;
+  border-radius: 999px;
+  padding: 12px 18px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--secondary);
+  color: var(--on-secondary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.audio-hint:active { transform: translateX(-50%) scale(0.96); }

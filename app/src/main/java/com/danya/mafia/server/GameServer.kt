@@ -13,6 +13,7 @@ import org.json.JSONObject
 class GameServer(
     private val context: Context,
     private val engine: GameEngine,
+    private val media: MediaLibrary,
     port: Int = 8080
 ) : NanoHTTPD(port) {
 
@@ -28,6 +29,8 @@ class GameServer(
                     serveAsset("index.html")
                 session.uri.startsWith("/assets/") ->
                     serveAsset(session.uri.removePrefix("/assets/"))
+                session.uri.startsWith("/media/") ->
+                    serveMedia(session.uri.removePrefix("/media/"))
                 session.uri == "/api/room" ->
                     cors(json(JSONObject().apply {
                         put("ok", true)
@@ -74,6 +77,21 @@ class GameServer(
         }
         val cache = if (binary) "public, max-age=86400" else "no-cache"
         return cors(response.also { it.addHeader("Cache-Control", cache) })
+    }
+
+    private fun serveMedia(id: String): Response {
+        val track = media.get(id)
+            ?: return cors(newFixedLengthResponse(
+                Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Sound not found"
+            ))
+        val response = newFixedLengthResponse(
+            Response.Status.OK,
+            track.info.mime,
+            java.io.ByteArrayInputStream(track.bytes),
+            track.bytes.size.toLong()
+        )
+        response.addHeader("Cache-Control", "no-cache")
+        return cors(response)
     }
 
     private fun handleJoin(session: IHTTPSession): Response {

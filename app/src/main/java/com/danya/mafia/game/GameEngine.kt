@@ -133,6 +133,7 @@ class GameEngine(
     private val guardedIds = mutableSetOf<String>()
 
     // ── Котость, звуки ведущего, сторож и мститель ──
+    private var catEnabled = config.catEnabled
     private val catOwners = mutableSetOf<String>()
     private val catBroken = mutableSetOf<String>()
     private var catSeq = 0L
@@ -304,8 +305,12 @@ class GameEngine(
         visitLog.clear()
         avengerWasAlive = false
 
-        // Котость: шанс 80% у каждого игрока. Спасает от первой смерти.
-        val catOwnersList = players.filter { Random.nextDouble() < CAT_CHANCE }
+        // Котость: шанс 80% у каждого игрока. Спасает только от мафии.
+        val catOwnersList = if (catEnabled) {
+            players.filter { Random.nextDouble() < CAT_CHANCE }
+        } else {
+            emptyList()
+        }
         catOwnersList.forEach { catOwners += it.id }
         if (catOwnersList.isNotEmpty()) {
             addLog("Котость есть у: ${catOwnersList.joinToString { it.name }}")
@@ -1455,15 +1460,32 @@ class GameEngine(
 
     // ── Звуки ведущего ──
 
-    fun playSound(kind: String, targetPlayerId: String?): ActionResult = synchronized(lock) {
-        if (kind !in SOUND_KINDS) return@synchronized ActionResult(false, "Неизвестный звук")
+    fun playSound(
+        kind: String,
+        targetPlayerId: String?,
+        src: String? = null
+    ): ActionResult = synchronized(lock) {
+        val custom = kind == "mp3" && !src.isNullOrBlank() && src.startsWith("/media/")
+        if (!custom && kind !in SOUND_KINDS) {
+            return@synchronized ActionResult(false, "Неизвестный звук")
+        }
         val target = if (targetPlayerId.isNullOrBlank()) null else playerById(targetPlayerId)
         if (!targetPlayerId.isNullOrBlank() && target == null) {
             return@synchronized ActionResult(false, "Игрок не найден")
         }
         soundSeq += 1
-        sound = SoundCommand(seq = soundSeq, kind = kind, targetId = target?.id)
-        addLog("Звук ${SOUND_LABELS[kind]} → ${target?.name ?: "все устройства"}")
+        sound = SoundCommand(seq = soundSeq, kind = kind, targetId = target?.id, src = src)
+        addLog("Звук ${SOUND_LABELS[kind] ?: "mp3"} → ${target?.name ?: "все устройства"}")
+        emit()
+        ActionResult(true)
+    }
+
+    /** Ведущий может выключить Котость до начала партии. */
+    fun setCatEnabled(enabled: Boolean): ActionResult = synchronized(lock) {
+        if (phase != Phase.LOBBY) {
+            return@synchronized ActionResult(false, "Менять можно только в лобби")
+        }
+        catEnabled = enabled
         emit()
         ActionResult(true)
     }
@@ -1689,7 +1711,8 @@ class GameEngine(
             chat = chat.toList(),
             activity = activity.values.sortedByDescending { it.at },
             pistolHolder = pistolHolderId?.let { playerById(it)?.name },
-            guardianNames = guardians.mapNotNull { playerById(it)?.name }
+            guardianNames = guardians.mapNotNull { playerById(it)?.name },
+            catEnabled = catEnabled
         )
     }
 
@@ -1700,9 +1723,16 @@ class GameEngine(
     }
 
     /** Экраны всех игроков — ведущий листает их в приложении. */
-    fun playerPreviews(): List<ClientState> = synchronized(lock) {
+    fun playerPreviews(): List<PlayerPreview> = synchronized(lock) {
         val now = System.currentTimeMillis()
-        players.map { buildClientState(it, now) }
+        players.map {
+            PlayerPreview(
+                id = it.id,
+                name = it.name,
+                token = it.token,
+                state = buildClientState(it, now)
+            )
+        }
     }
 
     private fun buildClientState(viewer: GamePlayer, now: Long): ClientState {

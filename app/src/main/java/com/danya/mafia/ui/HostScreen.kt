@@ -1,5 +1,6 @@
 package com.danya.mafia.ui
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -7,7 +8,12 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.view.WindowManager
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -58,22 +64,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.danya.mafia.game.ChatMessage
-import com.danya.mafia.game.ClientState
 import com.danya.mafia.game.GameEngine
 import com.danya.mafia.game.HostSnapshot
 import com.danya.mafia.game.PlayerActivity
+import com.danya.mafia.game.PlayerPreview
 import com.danya.mafia.game.PlayerView
 import com.danya.mafia.game.VoteStatus
+import com.danya.mafia.server.MediaLibrary
 
 @Composable
 fun HostScreen(
     state: HostSnapshot,
-    previews: List<ClientState>,
+    previews: List<PlayerPreview>,
+    soundTracks: List<MediaLibrary.Info>,
     roomUrl: String?,
     hostIp: String?,
     onStart: () -> Unit,
@@ -82,7 +92,11 @@ fun HostScreen(
     onClose: () -> Unit,
     onRefreshUrl: () -> Unit,
     onToggleAutoHost: (Boolean) -> Unit,
+    onToggleCat: (Boolean) -> Unit,
     onPlaySound: (String, String?) -> Unit,
+    onPlayTrack: (String, String?) -> Unit,
+    onAddSound: (Uri) -> Unit,
+    onRemoveTrack: (String) -> Unit,
     onRenamePlayer: (String, String) -> Unit,
     onKickPlayer: (String) -> Unit
 ) {
@@ -98,17 +112,26 @@ fun HostScreen(
         renameValue = player.name
     }
     val askKick: (PlayerView) -> Unit = { player -> kickTarget = player }
+    val soundPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) onAddSound(uri) }
+    val pickSound: () -> Unit = { soundPicker.launch(arrayOf("audio/*")) }
 
     if (state.phase == "lobby") {
         HostLobby(
             state = state,
             previews = previews,
+            soundTracks = soundTracks,
             roomUrl = roomUrl,
             hostIp = hostIp,
             onStart = onStart,
             onClose = requestClose,
             onRefreshUrl = onRefreshUrl,
             onToggleAutoHost = onToggleAutoHost,
+            onToggleCat = onToggleCat,
+            onPlayTrack = onPlayTrack,
+            onPickSound = pickSound,
+            onRemoveTrack = onRemoveTrack,
             onOpenScreens = { showScreens = true },
             onRename = askRename,
             onKick = askKick
@@ -117,12 +140,16 @@ fun HostScreen(
         HostGame(
             state = state,
             previews = previews,
+            soundTracks = soundTracks,
             roomUrl = roomUrl,
             onAdvance = onAdvance,
             onRestart = onRestart,
             onClose = requestClose,
             onToggleAutoHost = onToggleAutoHost,
             onPlaySound = onPlaySound,
+            onPlayTrack = onPlayTrack,
+            onPickSound = pickSound,
+            onRemoveTrack = onRemoveTrack,
             onOpenScreens = { showScreens = true },
             onRename = askRename,
             onKick = askKick
@@ -130,7 +157,11 @@ fun HostScreen(
     }
 
     if (showScreens) {
-        ScreensDialog(previews = previews, onClose = { showScreens = false })
+        ScreensDialog(
+            previews = previews,
+            roomUrl = roomUrl,
+            onClose = { showScreens = false }
+        )
     }
 
     if (renameTarget != null) {
@@ -207,13 +238,18 @@ fun HostScreen(
 @Composable
 private fun HostLobby(
     state: HostSnapshot,
-    previews: List<ClientState>,
+    previews: List<PlayerPreview>,
+    soundTracks: List<MediaLibrary.Info>,
     roomUrl: String?,
     hostIp: String?,
     onStart: () -> Unit,
     onClose: () -> Unit,
     onRefreshUrl: () -> Unit,
     onToggleAutoHost: (Boolean) -> Unit,
+    onToggleCat: (Boolean) -> Unit,
+    onPlayTrack: (String, String?) -> Unit,
+    onPickSound: () -> Unit,
+    onRemoveTrack: (String) -> Unit,
     onOpenScreens: () -> Unit,
     onRename: (PlayerView) -> Unit,
     onKick: (PlayerView) -> Unit
@@ -254,7 +290,21 @@ private fun HostLobby(
             }
 
             item {
+                CatRow(enabled = state.catEnabled, onChange = onToggleCat)
+            }
+
+            item {
                 ScreensCard(previews = previews, onOpen = onOpenScreens)
+            }
+
+            item {
+                Mp3Card(
+                    tracks = soundTracks,
+                    players = state.players,
+                    onPick = onPickSound,
+                    onPlay = onPlayTrack,
+                    onRemove = onRemoveTrack
+                )
             }
 
             item { SectionTitle("Участники (${state.players.size})") }
@@ -436,13 +486,17 @@ private fun WaitingCard(text: String) {
 @Composable
 private fun HostGame(
     state: HostSnapshot,
-    previews: List<ClientState>,
+    previews: List<PlayerPreview>,
+    soundTracks: List<MediaLibrary.Info>,
     roomUrl: String?,
     onAdvance: () -> Unit,
     onRestart: () -> Unit,
     onClose: () -> Unit,
     onToggleAutoHost: (Boolean) -> Unit,
     onPlaySound: (String, String?) -> Unit,
+    onPlayTrack: (String, String?) -> Unit,
+    onPickSound: () -> Unit,
+    onRemoveTrack: (String) -> Unit,
     onOpenScreens: () -> Unit,
     onRename: (PlayerView) -> Unit,
     onKick: (PlayerView) -> Unit
@@ -493,6 +547,16 @@ private fun HostGame(
 
             item {
                 SoundCard(players = state.players, onPlay = onPlaySound)
+            }
+
+            item {
+                Mp3Card(
+                    tracks = soundTracks,
+                    players = state.players,
+                    onPick = onPickSound,
+                    onPlay = onPlayTrack,
+                    onRemove = onRemoveTrack
+                )
             }
 
             if (nightTitle != null) {
@@ -710,7 +774,7 @@ private fun VoteCard(vote: VoteStatus, serverNow: Long) {
 }
 
 @Composable
-private fun ScreensCard(previews: List<ClientState>, onOpen: () -> Unit) {
+private fun ScreensCard(previews: List<PlayerPreview>, onOpen: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
@@ -720,12 +784,12 @@ private fun ScreensCard(previews: List<ClientState>, onOpen: () -> Unit) {
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
             Text(
-                "👁 Экраны игроков",
+                "👁 Живые экраны игроков",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
             Text(
-                "Что сейчас на сайте у каждого игрока. Листать — стрелками.",
+                "Настоящий сайт глазами игрока. Листать — стрелками, обновляется сам.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -756,11 +820,15 @@ private fun PlayerActions(
 }
 
 @Composable
-private fun ScreensDialog(previews: List<ClientState>, onClose: () -> Unit) {
+private fun ScreensDialog(
+    previews: List<PlayerPreview>,
+    roomUrl: String?,
+    onClose: () -> Unit
+) {
     if (previews.isEmpty()) return
     var index by remember { mutableStateOf(0) }
     val safe = index.coerceIn(0, previews.lastIndex)
-    val screen = previews[safe]
+    val preview = previews[safe]
 
     Dialog(
         onDismissRequest = onClose,
@@ -770,7 +838,7 @@ private fun ScreensDialog(previews: List<ClientState>, onClose: () -> Unit) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = {
@@ -783,13 +851,13 @@ private fun ScreensDialog(previews: List<ClientState>, onClose: () -> Unit) {
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            screen.you.name,
+                            preview.name,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
                         Text(
-                            "${safe + 1} из ${previews.size} · ${screen.phaseLabel}",
+                            "${safe + 1} из ${previews.size} · ${preview.state.phaseLabel}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -800,14 +868,10 @@ private fun ScreensDialog(previews: List<ClientState>, onClose: () -> Unit) {
                         Text("›", fontSize = 30.sp)
                     }
                 }
-                Spacer(Modifier.height(10.dp))
-                LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    item { PreviewScreen(screen) }
-                }
-                Spacer(Modifier.height(6.dp))
+                PlayerWebScreen(
+                    url = watchUrl(roomUrl, preview),
+                    modifier = Modifier.weight(1f)
+                )
                 TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
                     Text("Закрыть")
                 }
@@ -816,113 +880,54 @@ private fun ScreensDialog(previews: List<ClientState>, onClose: () -> Unit) {
     }
 }
 
-@Composable
-private fun PreviewScreen(screen: ClientState) {
-    val ends = screen.phaseEndsAt
-    val remaining = ends?.let { ((it - screen.serverNow) / 1000).coerceAtLeast(0) }
-    val prompt = screen.prompt
+private fun watchUrl(roomUrl: String?, preview: PlayerPreview): String {
+    // Телефон ведущего смотрит свой же сервер по loopback — так надёжнее.
+    val port = roomUrl?.let { Uri.parse(it).port }?.takeIf { it in 1..65535 } ?: 8080
+    return "http://127.0.0.1:$port/?watch=1" +
+        "&pid=${Uri.encode(preview.id)}&token=${Uri.encode(preview.token)}"
+}
 
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                DeviceIcon(screen.you.device, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    screen.you.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    if (!screen.you.alive) "💀 выбыл" else "🟢 в игре",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                screen.phaseLabel,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun PlayerWebScreen(url: String, modifier: Modifier = Modifier) {
+    var progress by remember(url) { mutableStateOf(0) }
+    Column(modifier = modifier.fillMaxSize()) {
+        if (progress < 100) {
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0, 100) / 100f },
+                modifier = Modifier.fillMaxWidth()
             )
-            if (remaining != null) {
-                Text(
-                    "⏳ Осталось: $remaining с",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (screen.message.isNotBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Text(screen.message, style = MaterialTheme.typography.bodyMedium)
-            }
-            if (screen.you.roleTitle != null) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "${screen.you.roleIcon ?: ""} ${screen.you.roleTitle}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-            }
-            val priv = screen.privateMessage
-            if (!priv.isNullOrBlank()) {
-                Spacer(Modifier.height(10.dp))
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                    shape = RoundedCornerShape(14.dp)
-                ) {
-                    Text(
-                        priv,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(10.dp)
-                    )
-                }
-            }
-            if (prompt != null) {
-                Spacer(Modifier.height(10.dp))
-                Text(prompt.title, style = MaterialTheme.typography.labelLarge)
-                if (prompt.targets.isNotEmpty()) {
-                    Text(
-                        prompt.targets.joinToString { it.name },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (prompt.canSkip) {
-                    Text(
-                        "можно пропустить",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            if (screen.events.isNotEmpty()) {
-                Spacer(Modifier.height(10.dp))
-                screen.events.takeLast(5).forEach { line ->
-                    Text(
-                        "• $line",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            if (!screen.winner.isNullOrBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    winnerTitle(screen.winner),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-            }
         }
+        Spacer(Modifier.height(4.dp))
+        AndroidView(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            factory = { context ->
+                WebView(context).apply {
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.mediaPlaybackRequiresUserGesture = false
+                    settings.loadWithOverviewMode = false
+                    settings.useWideViewPort = false
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                            progress = newProgress
+                        }
+                    }
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            progress = 100
+                        }
+                    }
+                    loadUrl(url)
+                }
+            },
+            update = { view ->
+                if (view.url != url) view.loadUrl(url)
+            }
+        )
     }
 }
 
@@ -998,6 +1003,106 @@ private fun SoundCard(players: List<PlayerView>, onPlay: (String, String?) -> Un
 }
 
 @Composable
+private fun Mp3Card(
+    tracks: List<MediaLibrary.Info>,
+    players: List<PlayerView>,
+    onPick: () -> Unit,
+    onPlay: (String, String?) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    var targetId by remember { mutableStateOf<String?>(null) }
+    val devices = players.filter { !it.left }
+    val targetName = devices.firstOrNull { it.id == targetId }?.name
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                "🎵 Свои mp3",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                if (targetName == null) "Файлы играют на всех телефонах"
+                else "Файлы играют только у $targetName",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = targetId == null,
+                    onClick = { targetId = null },
+                    label = { Text("Все") }
+                )
+                devices.forEach { player ->
+                    FilterChip(
+                        selected = targetId == player.id,
+                        onClick = { targetId = player.id },
+                        label = { Text(player.name) }
+                    )
+                }
+            }
+            if (tracks.isEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Добавьте mp3 с телефона — он зазвучит на телефонах игроков.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                tracks.forEach { track ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                track.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                formatSize(track.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(onClick = { onPlay(track.id, targetId) }) {
+                            Text("▶")
+                        }
+                        IconButton(onClick = { onRemove(track.id) }) {
+                            Text("✕")
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onPick, modifier = Modifier.fillMaxWidth()) {
+                Text("Добавить mp3")
+            }
+        }
+    }
+}
+
+private fun formatSize(bytes: Long): String = when {
+    bytes >= 1024 * 1024 -> String.format("%.1f МБ", bytes / 1024f / 1024f)
+    bytes >= 1024 -> "${bytes / 1024} КБ"
+    else -> "$bytes Б"
+}
+
+@Composable
 private fun AutoHostRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1019,6 +1124,37 @@ private fun AutoHostRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
                 Text(
                     if (enabled) "Сам переключает ночь и итоги — можно играть на сайте"
                     else "Вы ведёте вручную кнопкой «Далее»",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = onChange)
+        }
+    }
+}
+
+@Composable
+private fun CatRow(enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "🐱 Котость",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    if (enabled) "Может спасти игрока от первого удара мафии"
+                    else "Выключена — защиты от мафии не будет ни у кого",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

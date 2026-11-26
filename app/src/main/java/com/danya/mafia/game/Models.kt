@@ -8,7 +8,8 @@ data class RoomConfig(
     val password: String? = null,
     val allowedRoles: Set<String> = Role.defaultAllowed,
     val maxPlayers: Int = 0,
-    val autoHost: Boolean = true
+    val autoHost: Boolean = true,
+    val catEnabled: Boolean = true
 )
 
 data class RoomInfo(
@@ -94,19 +95,23 @@ data class PlayerView(
 data class SoundCommand(
     val seq: Long,
     val kind: String,
-    val targetId: String? = null
+    val targetId: String? = null,
+    /** Для mp3 — путь к файлу на сервере комнаты, например /media/s1. */
+    val src: String? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("seq", seq)
         put("kind", kind)
         if (targetId != null) put("targetId", targetId)
+        if (src != null) put("src", src)
     }
 
     companion object {
         fun fromJson(o: JSONObject) = SoundCommand(
             seq = o.optLong("seq"),
             kind = o.optString("kind"),
-            targetId = o.nullableString("targetId")
+            targetId = o.nullableString("targetId"),
+            src = o.nullableString("src")
         )
     }
 }
@@ -360,6 +365,14 @@ data class ClientState(
     }
 }
 
+/** Экран игрока для ведущего: состояние + токен, чтобы открыть его в WebView. */
+data class PlayerPreview(
+    val id: String,
+    val name: String,
+    val token: String,
+    val state: ClientState
+)
+
 data class HostSnapshot(
     val roomName: String,
     val phase: String,
@@ -389,7 +402,8 @@ data class HostSnapshot(
     val chat: List<ChatMessage> = emptyList(),
     val activity: List<PlayerActivity> = emptyList(),
     val pistolHolder: String? = null,
-    val guardianNames: List<String> = emptyList()
+    val guardianNames: List<String> = emptyList(),
+    val catEnabled: Boolean = true
 )
 
 data class JoinResponse(

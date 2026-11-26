@@ -26,6 +26,7 @@ fun MafiaApp(vm: AppViewModel = viewModel()) {
     val roomUrl by vm.roomUrl.collectAsStateWithLifecycle()
     val hostIp by vm.hostIp.collectAsStateWithLifecycle()
     val previews by vm.previews.collectAsStateWithLifecycle()
+    val soundTracks by vm.soundTracks.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
 
@@ -66,6 +67,7 @@ fun MafiaApp(vm: AppViewModel = viewModel()) {
                         HostScreen(
                             state = state,
                             previews = previews,
+                            soundTracks = soundTracks,
                             roomUrl = roomUrl,
                             hostIp = hostIp,
                             onStart = vm::startHostGame,
@@ -74,7 +76,11 @@ fun MafiaApp(vm: AppViewModel = viewModel()) {
                             onClose = vm::goHome,
                             onRefreshUrl = vm::refreshHostUrl,
                             onToggleAutoHost = vm::setAutoHost,
+                            onToggleCat = vm::setCatEnabled,
                             onPlaySound = vm::playSound,
+                            onPlayTrack = vm::playTrack,
+                            onAddSound = vm::addSound,
+                            onRemoveTrack = vm::removeSound,
                             onRenamePlayer = vm::renamePlayer,
                             onKickPlayer = vm::kickPlayer
                         )
