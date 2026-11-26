@@ -35,8 +35,8 @@ private enum class StepKind { ACTION, TEAM, INFO }
 
 private data class GamePlayer(
     val id: String,
-    val token: String,
-    val name: String,
+    var token: String,
+    var name: String,
     val device: String,
     val joinedAt: Long,
     var role: Role? = null,
@@ -311,7 +311,7 @@ class GameEngine(
             addLog("Котость есть у: ${catOwnersList.joinToString { it.name }}")
             catOwnersList.forEach { p ->
                 privateMessages[p.id] =
-                    "🐱 У вас есть Котость! Она спасёт вас от первой смерти, но треснет."
+                    "🐱 У вас есть Котость! Она спасёт вас от первого убийства мафии, но треснет."
             }
         }
         if (Random.nextDouble() < PISTOL_CHANCE) {
@@ -476,20 +476,12 @@ class GameEngine(
 
         sniperUsed = true
         if (target.role?.team == Team.MAFIA) {
-            val died = tryKill(target, "снайпер")
-            events += if (died) {
-                "🎯 Снайпер выстрелил в ${target.name}. Это была мафия! Она погибла."
-            } else {
-                "🎯 Снайпер выстрелил в ${target.name}, но Котость спасла цель."
-            }
+            tryKill(target, "снайпер")
+            events += "🎯 Снайпер выстрелил в ${target.name}. Это была мафия! Она погибла."
             addLog("Снайпер выстрелил в ${target.name} (${target.role?.title})")
         } else {
-            val died = tryKill(sniper, "промах снайпера")
-            events += if (died) {
-                "🎯 Снайпер выстрелил в ${target.name}, но попал в мирного. Снайпер погиб."
-            } else {
-                "🎯 Снайпер промахнулся, но его спасла Котость."
-            }
+            tryKill(sniper, "промах снайпера")
+            events += "🎯 Снайпер выстрелил в ${target.name}, но попал в мирного. Снайпер погиб."
             addLog("Снайпер промахнулся в ${target.name}")
         }
         winner = checkWinner()
@@ -517,13 +509,9 @@ class GameEngine(
         if (target.id == p.id) return ActionResult(false, "Нельзя стрелять в себя")
 
         pistolUsed = true
-        val died = tryKill(target, "пистолет")
-        events += if (died) {
-            "🔫 ${p.name} выстрелил в ${target.name}. " +
-                "Роль: ${target.role?.icon ?: ""} ${target.role?.title ?: "?"}."
-        } else {
-            "🔫 ${p.name} выстрелил в ${target.name}, но его спасла Котость."
-        }
+        tryKill(target, "пистолет")
+        events += "🔫 ${p.name} выстрелил в ${target.name}. " +
+            "Роль: ${target.role?.icon ?: ""} ${target.role?.title ?: "?"}."
         addLog("${p.name} выстрелил в ${target.name} (${target.role?.title})")
         winner = checkWinner()
         if (winner != null) gameOver()
@@ -1170,7 +1158,7 @@ class GameEngine(
                 mafiaTarget.id == doctorTargetId ->
                     events += "💚 Доктор спас ${mafiaTarget.name} от мафии."
                 mafiaTarget.alive -> {
-                    if (tryKill(mafiaTarget, "мафия")) {
+                    if (tryKill(mafiaTarget, "мафия", catCanSave = true)) {
                         someoneDied = true
                         events += "🔴 Мафия убила ${mafiaTarget.name}."
                     }
@@ -1205,12 +1193,11 @@ class GameEngine(
                 .randomOrNull()
             if (victim == null) {
                 events += "⚔️ Мститель погиб, но отомстить было некому."
-            } else if (tryKill(victim, "месть мстителя")) {
+            } else {
+                tryKill(victim, "месть мстителя")
                 someoneDied = true
                 events += "⚔️ Мститель погиб и забрал с собой ${victim.name}."
                 addLog("Мститель ${avenger.name} забрал ${victim.name} (${victim.role?.title})")
-            } else {
-                events += "⚔️ Мститель погиб, но котость спасла его убийцу."
             }
         }
 
@@ -1355,18 +1342,13 @@ class GameEngine(
         if (leaders.size == 1) {
             val eliminated = playerById(leaders[0])
             if (eliminated != null) {
-                val died = tryKill(eliminated, "голосование")
-                if (died) {
-                    events += "🗳️ ${eliminated.name} исключён из игры."
-                    events += "Его роль: ${eliminated.role?.icon ?: ""} ${eliminated.role?.title ?: "?"}."
-                    addLog("Исключён ${eliminated.name} (${eliminated.role?.title})")
-                    if (eliminated.role == Role.JESTER) {
-                        jesterWon = true
-                        events += "🃏 Это был Шут! Шут добился своего и побеждает!"
-                    }
-                } else {
-                    events += "🗳️ Голосование против ${eliminated.name} провалилось."
-                    addLog("Котость спасла ${eliminated.name} от изгнания")
+                tryKill(eliminated, "голосование")
+                events += "🗳️ ${eliminated.name} исключён из игры."
+                events += "Его роль: ${eliminated.role?.icon ?: ""} ${eliminated.role?.title ?: "?"}."
+                addLog("Исключён ${eliminated.name} (${eliminated.role?.title})")
+                if (eliminated.role == Role.JESTER) {
+                    jesterWon = true
+                    events += "🃏 Это был Шут! Шут добился своего и побеждает!"
                 }
             }
         } else {
@@ -1454,9 +1436,6 @@ class GameEngine(
     fun sendChat(playerId: String, token: String, textRaw: String): ActionResult = synchronized(lock) {
         val p = auth(playerId, token)
             ?: return@synchronized ActionResult(false, "Сессия не найдена")
-        if (!mafiaChatAllowed(p)) {
-            return@synchronized ActionResult(false, "Чат доступен только мафии")
-        }
         val text = textRaw.trim().replace("\n", " ").take(300)
         if (text.isBlank()) return@synchronized ActionResult(false, "Пустое сообщение")
         val now = System.currentTimeMillis()
@@ -1474,10 +1453,6 @@ class GameEngine(
         ActionResult(true)
     }
 
-    /** Чат — только для мафии (и Адвоката, который знает мафию). */
-    private fun mafiaChatAllowed(p: GamePlayer): Boolean =
-        p.role?.team == Team.MAFIA || p.role == Role.ADVOCATE
-
     // ── Звуки ведущего ──
 
     fun playSound(kind: String, targetPlayerId: String?): ActionResult = synchronized(lock) {
@@ -1489,6 +1464,54 @@ class GameEngine(
         soundSeq += 1
         sound = SoundCommand(seq = soundSeq, kind = kind, targetId = target?.id)
         addLog("Звук ${SOUND_LABELS[kind]} → ${target?.name ?: "все устройства"}")
+        emit()
+        ActionResult(true)
+    }
+
+    // ── Управление игроками (только ведущий) ──
+
+    fun renamePlayer(playerId: String, rawName: String): ActionResult = synchronized(lock) {
+        val p = playerById(playerId) ?: return@synchronized ActionResult(false, "Игрок не найден")
+        val name = rawName.trim().replace("\n", " ").take(20)
+        if (name.length < 2) return@synchronized ActionResult(false, "Имя слишком короткое")
+        if (players.any { it.id != p.id && it.name.equals(name, ignoreCase = true) }) {
+            return@synchronized ActionResult(false, "Такое имя уже занято")
+        }
+        val old = p.name
+        p.name = name
+        addLog("Ведущий переименовал $old → $name")
+        emit()
+        ActionResult(true)
+    }
+
+    /**
+     * Убирает игрока из комнаты. В лобби — совсем, в партии — помечает выбывшим
+     * и обнуляет сессию, чтобы телефон больше не мог действовать.
+     */
+    fun kickPlayer(playerId: String): ActionResult = synchronized(lock) {
+        val p = playerById(playerId) ?: return@synchronized ActionResult(false, "Игрок не найден")
+        if (phase == Phase.LOBBY) {
+            players.remove(p)
+            addLog("${p.name} удалён из комнаты")
+            events = mutableListOf("🚪 ${p.name} удалён ведущим.")
+            emit()
+            return@synchronized ActionResult(true)
+        }
+        if (p.left && !p.alive) return@synchronized ActionResult(false, "Игрок уже выбыл")
+        p.left = true
+        p.alive = false
+        p.token = "kicked-${System.nanoTime()}"
+        voteOrder.remove(p.id)
+        if (pistolHolderId == p.id) pistolHolderId = null
+        val s = step
+        if (s != null && p.id in s.actorIds) {
+            s.done = true
+            s.doneAt = System.currentTimeMillis()
+        }
+        events += "🚪 ${p.name} удалён ведущим."
+        addLog("${p.name} удалён ведущим")
+        winner = checkWinner()
+        if (winner != null) gameOver()
         emit()
         ActionResult(true)
     }
@@ -1516,12 +1539,12 @@ class GameEngine(
     }
 
     /**
-     * Убивает игрока с учётом Котости.
+     * Убивает игрока. Котость спасает только от мафии — и только один раз.
      * Возвращает true, если игрок действительно погиб.
      */
-    private fun tryKill(target: GamePlayer, cause: String): Boolean {
+    private fun tryKill(target: GamePlayer, cause: String, catCanSave: Boolean = false): Boolean {
         if (!target.alive) return false
-        if (target.id in catOwners && target.id !in catBroken) {
+        if (catCanSave && target.id in catOwners && target.id !in catBroken) {
             catBroken += target.id
             catSeq += 1
             catEvent = CatEvent(seq = catSeq, playerId = target.id, playerName = target.name)
@@ -1671,8 +1694,18 @@ class GameEngine(
     }
 
     fun clientState(playerId: String, token: String): ClientState? = synchronized(lock) {
-        val viewer = players.firstOrNull { it.id == playerId && it.token == token } ?: return@synchronized null
+        val viewer = players.firstOrNull { it.id == playerId && it.token == token }
+            ?: return@synchronized null
+        buildClientState(viewer, System.currentTimeMillis())
+    }
+
+    /** Экраны всех игроков — ведущий листает их в приложении. */
+    fun playerPreviews(): List<ClientState> = synchronized(lock) {
         val now = System.currentTimeMillis()
+        players.map { buildClientState(it, now) }
+    }
+
+    private fun buildClientState(viewer: GamePlayer, now: Long): ClientState {
         val viewerIsMafia = viewer.role?.team == Team.MAFIA
         val viewerIsAdvocate = viewer.role == Role.ADVOCATE
         val reveal = rolesRevealed
@@ -1728,8 +1761,8 @@ class GameEngine(
             rolesRevealed = rolesRevealed,
             nightRoleTitle = s?.role?.title,
             nightRoleIcon = s?.role?.icon,
-            chat = if (mafiaChatAllowed(viewer)) chat.toList() else emptyList(),
-            canChat = mafiaChatAllowed(viewer),
+            chat = chat.toList(),
+            canChat = true,
             sound = sound?.takeIf { it.targetId == null || it.targetId == viewer.id },
             catSave = catEvent
         )

@@ -4,10 +4,6 @@
   const app = document.getElementById('app');
   const SESSION_KEY = 'mafia_session_v1';
 
-  // На Vercel страница работает через реле: запросы уходят ведущему.
-  const RELAY = window.MAFIA_RELAY || null;
-  const relayCode = () => ((RELAY && RELAY.code) || '').trim().toUpperCase();
-
   // Прогреваем картинку котости, чтобы полноэкранная анимация открылась сразу.
   try { new Image().src = '/assets/cat.png'; } catch (_) {}
 
@@ -50,7 +46,6 @@
   // ─────────────────────────────────────────
 
   async function api(path, opts = {}) {
-    if (RELAY) return relayApi(path, opts);
     const headers = { Accept: 'application/json' };
     if (opts.body) headers['Content-Type'] = 'application/json; charset=utf-8';
     const response = await fetch(path, { ...opts, headers });
@@ -69,57 +64,8 @@
     return data;
   }
 
-  function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  /**
-   * Режим реле: ставим запрос в очередь ведущему и ждём ответ.
-   * Телефон ведущего сам опрашивает Vercel, поэтому белый IP не нужен.
-   */
-  async function relayApi(path, opts = {}) {
-    const code = relayCode();
-    if (!code) throw new Error('Сначала введите код комнаты');
-    const method = (opts.method || 'GET').toUpperCase();
-    const body = opts.body || '';
-
-    const enqueueResponse = await fetch('/api/relay/enqueue', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ code, method, path, body })
-    });
-    if (!enqueueResponse.ok) throw new Error('Реле недоступно');
-    const enqueued = await enqueueResponse.json();
-    if (!enqueued || !enqueued.id) throw new Error('Реле недоступно');
-
-    for (let i = 0; i < 26; i++) {
-      await sleep(500);
-      let response;
-      try {
-        response = await fetch('/api/relay/result?id=' + encodeURIComponent(enqueued.id));
-      } catch (_) {
-        continue;
-      }
-      if (!response.ok) continue;
-      const data = await response.json();
-      if (data.pending) continue;
-      const text = data.body || '';
-      let parsed = {};
-      if (text) {
-        try {
-          parsed = JSON.parse(text);
-        } catch (_) {
-          parsed = { error: text };
-        }
-      }
-      if (data.status >= 200 && data.status < 300) return parsed;
-      throw new Error(parsed.error || ('HTTP ' + data.status));
-    }
-    throw new Error('Ведущий не отвечает. Проверьте код комнаты.');
-  }
-
   function originKey() {
-    return RELAY ? location.origin + '#relay:' + relayCode() : location.origin;
+    return location.origin;
   }
 
   function stateUrl() {
@@ -198,7 +144,7 @@
 
   function startPolling() {
     stopPolling();
-    pollTimer = setInterval(poll, RELAY ? 1600 : 1200);
+    pollTimer = setInterval(poll, 1200);
     poll();
   }
 
@@ -211,7 +157,7 @@
 
   function startActivityReporting() {
     stopActivityReporting();
-    activityTimer = setInterval(reportActivity, RELAY ? 8000 : 3000);
+    activityTimer = setInterval(reportActivity, 3000);
   }
 
   function stopActivityReporting() {
@@ -440,7 +386,7 @@
           <span>Ждём ведущего. Игра начнётся, когда все соберутся.</span>
         </div>
 
-        <div class="hint center">Чат — только для мафии. Обычным игрокам он не виден.</div>
+        <div class="hint center">Общий чат открыт для всех — можно знакомиться и договариваться.</div>
 
         <div style="height:12px"></div>
         <button class="btn ghost" data-action="leave">Выйти из комнаты</button>
@@ -837,16 +783,6 @@
       event.preventDefault();
       join();
     }
-    if (event.target && event.target.id === 'relay-code-form') {
-      event.preventDefault();
-      const code = (document.getElementById('relay-code')?.value || '').trim().toUpperCase();
-      if (!code) return;
-      try {
-        localStorage.setItem('mafia_relay_code', code);
-      } catch (_) {}
-      if (RELAY) RELAY.code = code;
-      boot();
-    }
     if (event.target && event.target.id === 'chat-form') {
       event.preventDefault();
       const input = document.getElementById('chat-input');
@@ -888,8 +824,6 @@
       toggleChat();
     } else if (name === 'retry') {
       boot();
-    } else if (name === 'change-code') {
-      changeRelayCode();
     }
   });
 
@@ -1244,53 +1178,9 @@
         </div>
         <div class="banner error">${esc(message)}</div>
         <button class="btn primary" data-action="retry">Повторить</button>
-        ${RELAY ? '<div style="height:8px"></div><button class="btn ghost" data-action="change-code">Сменить код комнаты</button>' : ''}
-      </div>`;
-  }
-
-  function changeRelayCode() {
-    if (!RELAY) return;
-    stopPolling();
-    stopActivityReporting();
-    clearSession();
-    session = null;
-    state = null;
-    chatSig = '';
-    unread = 0;
-    lastSeenChatId = 0;
-    RELAY.code = '';
-    try {
-      localStorage.removeItem('mafia_relay_code');
-    } catch (_) {}
-    renderChat();
-    renderRelayCodePrompt();
-  }
-
-  function renderRelayCodePrompt() {
-    app.innerHTML = `
-      <div class="screen">
-        <div class="brand">
-          <div class="mask">🎭</div>
-          <h1>МАФИЯ</h1>
-          <p>Игра на расстоянии. Введите код комнаты, который дал ведущий.</p>
-        </div>
-        <form id="relay-code-form" class="card">
-          <label class="field">
-            <span>Код комнаты</span>
-            <input id="relay-code" maxlength="8" placeholder="Например, ABC123"
-              autocomplete="off" autocapitalize="characters" required>
-          </label>
-          <div style="height:16px"></div>
-          <button class="btn primary" type="submit">Войти в комнату</button>
-        </form>
-        <div class="hint center">Телефон ведущего должен быть онлайн.</div>
       </div>`;
   }
 
   setInterval(updateCountdowns, 250);
-  if (RELAY && !relayCode()) {
-    renderRelayCodePrompt();
-  } else {
-    boot();
-  }
+  boot();
 })();

@@ -86,7 +86,7 @@ fun HomeScreen(onCreate: () -> Unit) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                "Не в одной сети? В лобби включите «Игра на расстоянии» через Vercel.",
+                "Все играют в браузере: подключитесь к одной Wi-Fi или точке доступа ведущего.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center

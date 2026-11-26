@@ -312,7 +312,8 @@ fun PlayerRow(
                         color = teamColor(player.roleTeam)
                     )
                 }
-            } else if (trailing != null) {
+            }
+            if (trailing != null) {
                 trailing()
             }
         }

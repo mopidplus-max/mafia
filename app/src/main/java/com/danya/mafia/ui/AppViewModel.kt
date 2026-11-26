@@ -5,9 +5,9 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.danya.mafia.game.GameEngine
+import com.danya.mafia.game.ClientState
 import com.danya.mafia.game.HostSnapshot
 import com.danya.mafia.game.RoomConfig
-import com.danya.mafia.relay.RelayClient
 import com.danya.mafia.server.GameServer
 import com.danya.mafia.server.LocalNetwork
 import fi.iki.elonen.NanoHTTPD
@@ -16,15 +16,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 
 /**
  * Приложение — только пульт ведущего.
@@ -69,18 +64,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _serverPort = MutableStateFlow(8080)
     val serverPort: StateFlow<Int> = _serverPort.asStateFlow()
 
-    private val _relayUrl = MutableStateFlow(prefs.getString("relay_url", "") ?: "")
-    val relayUrl: StateFlow<String> = _relayUrl.asStateFlow()
-
-    private val _relayCode = MutableStateFlow(prefs.getString("relay_code", "") ?: "")
-    val relayCode: StateFlow<String> = _relayCode.asStateFlow()
-
-    private val _relayEnabled = MutableStateFlow(prefs.getBoolean("relay_enabled", false))
-    val relayEnabled: StateFlow<Boolean> = _relayEnabled.asStateFlow()
+    private val _previews = MutableStateFlow<List<ClientState>>(emptyList())
+    val previews: StateFlow<List<ClientState>> = _previews.asStateFlow()
 
     private var host: HostSession? = null
     private var hostCollect: Job? = null
-    private var relayJob: Job? = null
 
     fun goHome() {
         closeHost()
@@ -125,13 +113,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _hostState.value = engine.hostSnapshot.value
                 hostCollect?.cancel()
                 hostCollect = viewModelScope.launch {
-                    engine.hostSnapshot.collect { _hostState.value = it }
+                    engine.hostSnapshot.collect {
+                        _hostState.value = it
+                        _previews.value = engine.playerPreviews()
+                    }
                 }
                 _hostIp.value = ip
                 _roomUrl.value = ip?.let { "http://$it:${_serverPort.value}" }
                 _screen.value = Screen.Host
                 _error.value = null
-                if (_relayEnabled.value) startRelay()
             } catch (e: Exception) {
                 server?.stop()
                 engineScope?.cancel()
@@ -165,6 +155,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (result != null && !result.ok) _error.value = result.error
     }
 
+    fun renamePlayer(playerId: String, name: String) {
+        val result = host?.engine?.renamePlayer(playerId, name)
+        if (result != null && !result.ok) _error.value = result.error
+    }
+
+    fun kickPlayer(playerId: String) {
+        val result = host?.engine?.kickPlayer(playerId)
+        if (result != null && !result.ok) _error.value = result.error
+    }
+
     fun refreshHostUrl() {
         val ip = LocalNetwork.ipv4()
         _hostIp.value = ip
@@ -172,7 +172,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeHost() {
-        stopRelay()
         hostCollect?.cancel()
         hostCollect = null
         host?.server?.stop()
@@ -180,100 +179,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         host = null
         _roomUrl.value = null
         _hostIp.value = null
-    }
-
-    // ── Реле Vercel ──
-
-    fun setRelay(url: String, code: String, enabled: Boolean) {
-        val cleanUrl = url.trim().trimEnd('/')
-        val cleanCode = code.trim().uppercase()
-            .filter { it in 'A'..'Z' || it in '0'..'9' }
-            .take(8)
-        _relayUrl.value = cleanUrl
-        _relayCode.value = cleanCode
-        _relayEnabled.value = enabled
-        prefs.edit()
-            .putString("relay_url", cleanUrl)
-            .putString("relay_code", cleanCode)
-            .putBoolean("relay_enabled", enabled)
-            .apply()
-        if (enabled) startRelay() else stopRelay()
-    }
-
-    private fun startRelay() {
-        stopRelay()
-        val url = _relayUrl.value
-        val code = _relayCode.value
-        if (url.isBlank() || code.isBlank()) {
-            _relayEnabled.value = false
-            _error.value = "Для игры на расстоянии нужны адрес реле и код комнаты"
-            return
-        }
-        if (host == null) return
-        val client = RelayClient(url, code)
-        relayJob = viewModelScope.launch(Dispatchers.IO) {
-            while (isActive) {
-                try {
-                    val requests = client.poll()
-                    if (requests.isNotEmpty()) {
-                        client.reply(requests.map { forwardToLocal(it) })
-                    }
-                } catch (_: Exception) {
-                    // Следующая попытка через мгновение.
-                }
-                delay(700)
-            }
-        }
-    }
-
-    private fun stopRelay() {
-        relayJob?.cancel()
-        relayJob = null
-    }
-
-    /** Выполняет запрос игрока на локальном сервере комнаты. */
-    private fun forwardToLocal(request: JSONObject): JSONObject {
-        val id = request.optString("id")
-        val method = request.optString("method", "GET")
-        val path = request.optString("path", "/")
-        val body = request.optString("body", "")
-        return try {
-            val connection =
-                (URL("http://127.0.0.1:${_serverPort.value}$path").openConnection() as HttpURLConnection)
-                    .apply {
-                        requestMethod = method
-                        connectTimeout = 5_000
-                        readTimeout = 10_000
-                        if (body.isNotBlank()) {
-                            doOutput = true
-                            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                        }
-                    }
-            if (body.isNotBlank()) {
-                connection.outputStream.use {
-                    it.write(body.toByteArray(Charsets.UTF_8))
-                }
-            }
-            val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-            connection.disconnect()
-            JSONObject()
-                .put("id", id)
-                .put("status", status)
-                .put("body", text)
-        } catch (e: Exception) {
-            JSONObject()
-                .put("id", id)
-                .put("status", 502)
-                .put(
-                    "body",
-                    JSONObject()
-                        .put("ok", false)
-                        .put("error", e.message ?: "Локальный сервер недоступен")
-                        .toString()
-                )
-        }
+        _previews.value = emptyList()
     }
 
     override fun onCleared() {

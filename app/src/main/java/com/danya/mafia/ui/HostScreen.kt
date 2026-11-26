@@ -43,6 +43,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -58,7 +59,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.danya.mafia.game.ChatMessage
+import com.danya.mafia.game.ClientState
 import com.danya.mafia.game.GameEngine
 import com.danya.mafia.game.HostSnapshot
 import com.danya.mafia.game.PlayerActivity
@@ -68,47 +73,111 @@ import com.danya.mafia.game.VoteStatus
 @Composable
 fun HostScreen(
     state: HostSnapshot,
+    previews: List<ClientState>,
     roomUrl: String?,
     hostIp: String?,
-    relayUrl: String,
-    relayCode: String,
-    relayEnabled: Boolean,
     onStart: () -> Unit,
     onAdvance: () -> Unit,
     onRestart: () -> Unit,
     onClose: () -> Unit,
     onRefreshUrl: () -> Unit,
     onToggleAutoHost: (Boolean) -> Unit,
-    onRelayChange: (String, String, Boolean) -> Unit,
-    onPlaySound: (String, String?) -> Unit
+    onPlaySound: (String, String?) -> Unit,
+    onRenamePlayer: (String, String) -> Unit,
+    onKickPlayer: (String) -> Unit
 ) {
     KeepScreenOn()
     var confirmClose by remember { mutableStateOf(false) }
+    var showScreens by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<PlayerView?>(null) }
+    var renameValue by remember { mutableStateOf("") }
+    var kickTarget by remember { mutableStateOf<PlayerView?>(null) }
     val requestClose: () -> Unit = { confirmClose = true }
+    val askRename: (PlayerView) -> Unit = { player ->
+        renameTarget = player
+        renameValue = player.name
+    }
+    val askKick: (PlayerView) -> Unit = { player -> kickTarget = player }
 
     if (state.phase == "lobby") {
         HostLobby(
             state = state,
+            previews = previews,
             roomUrl = roomUrl,
             hostIp = hostIp,
-            relayUrl = relayUrl,
-            relayCode = relayCode,
-            relayEnabled = relayEnabled,
             onStart = onStart,
             onClose = requestClose,
             onRefreshUrl = onRefreshUrl,
             onToggleAutoHost = onToggleAutoHost,
-            onRelayChange = onRelayChange
+            onOpenScreens = { showScreens = true },
+            onRename = askRename,
+            onKick = askKick
         )
     } else {
         HostGame(
             state = state,
+            previews = previews,
             roomUrl = roomUrl,
             onAdvance = onAdvance,
             onRestart = onRestart,
             onClose = requestClose,
             onToggleAutoHost = onToggleAutoHost,
-            onPlaySound = onPlaySound
+            onPlaySound = onPlaySound,
+            onOpenScreens = { showScreens = true },
+            onRename = askRename,
+            onKick = askKick
+        )
+    }
+
+    if (showScreens) {
+        ScreensDialog(previews = previews, onClose = { showScreens = false })
+    }
+
+    if (renameTarget != null) {
+        AlertDialog(
+            onDismissRequest = { renameTarget = null },
+            title = { Text("Новое имя") },
+            text = {
+                OutlinedTextField(
+                    value = renameValue,
+                    onValueChange = { renameValue = it.take(20) },
+                    singleLine = true,
+                    label = { Text("Имя игрока") }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val target = renameTarget
+                        renameTarget = null
+                        if (target != null) onRenamePlayer(target.id, renameValue)
+                    },
+                    enabled = renameValue.trim().length >= 2
+                ) { Text("Сохранить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameTarget = null }) { Text("Отмена") }
+            }
+        )
+    }
+
+    if (kickTarget != null) {
+        AlertDialog(
+            onDismissRequest = { kickTarget = null },
+            title = { Text("Убрать игрока?") },
+            text = {
+                Text("${kickTarget?.name ?: ""} потеряет доступ к комнате. В партии он сразу выбывает.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val target = kickTarget
+                    kickTarget = null
+                    if (target != null) onKickPlayer(target.id)
+                }) { Text("Убрать") }
+            },
+            dismissButton = {
+                TextButton(onClick = { kickTarget = null }) { Text("Отмена") }
+            }
         )
     }
 
@@ -138,16 +207,16 @@ fun HostScreen(
 @Composable
 private fun HostLobby(
     state: HostSnapshot,
+    previews: List<ClientState>,
     roomUrl: String?,
     hostIp: String?,
-    relayUrl: String,
-    relayCode: String,
-    relayEnabled: Boolean,
     onStart: () -> Unit,
     onClose: () -> Unit,
     onRefreshUrl: () -> Unit,
     onToggleAutoHost: (Boolean) -> Unit,
-    onRelayChange: (String, String, Boolean) -> Unit
+    onOpenScreens: () -> Unit,
+    onRename: (PlayerView) -> Unit,
+    onKick: (PlayerView) -> Unit
 ) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
@@ -185,12 +254,7 @@ private fun HostLobby(
             }
 
             item {
-                RelayCard(
-                    url = relayUrl,
-                    code = relayCode,
-                    enabled = relayEnabled,
-                    onChange = onRelayChange
-                )
+                ScreensCard(previews = previews, onOpen = onOpenScreens)
             }
 
             item { SectionTitle("Участники (${state.players.size})") }
@@ -198,7 +262,11 @@ private fun HostLobby(
                 item { WaitingCard("Ждём игроков. Пока никого нет.") }
             } else {
                 items(state.players, key = { it.id }) { player ->
-                    PlayerRow(player = player, showRole = false)
+                    PlayerRow(
+                        player = player,
+                        showRole = false,
+                        trailing = { PlayerActions(player, onRename, onKick) }
+                    )
                 }
             }
 
@@ -368,12 +436,16 @@ private fun WaitingCard(text: String) {
 @Composable
 private fun HostGame(
     state: HostSnapshot,
+    previews: List<ClientState>,
     roomUrl: String?,
     onAdvance: () -> Unit,
     onRestart: () -> Unit,
     onClose: () -> Unit,
     onToggleAutoHost: (Boolean) -> Unit,
-    onPlaySound: (String, String?) -> Unit
+    onPlaySound: (String, String?) -> Unit,
+    onOpenScreens: () -> Unit,
+    onRename: (PlayerView) -> Unit,
+    onKick: (PlayerView) -> Unit
 ) {
     val context = LocalContext.current
     var showLog by remember { mutableStateOf(false) }
@@ -413,6 +485,10 @@ private fun HostGame(
 
             item {
                 AutoHostRow(enabled = state.autoHost, onChange = onToggleAutoHost)
+            }
+
+            item {
+                ScreensCard(previews = previews, onOpen = onOpenScreens)
             }
 
             item {
@@ -480,7 +556,11 @@ private fun HostGame(
 
             item { SectionTitle("Роли игроков") }
             items(state.players, key = { it.id }) { player ->
-                PlayerRow(player = player, showRole = true)
+                PlayerRow(
+                    player = player,
+                    showRole = true,
+                    trailing = { PlayerActions(player, onRename, onKick) }
+                )
             }
 
             if (vote != null) {
@@ -630,15 +710,7 @@ private fun VoteCard(vote: VoteStatus, serverNow: Long) {
 }
 
 @Composable
-private fun RelayCard(
-    url: String,
-    code: String,
-    enabled: Boolean,
-    onChange: (String, String, Boolean) -> Unit
-) {
-    var urlValue by remember(url) { mutableStateOf(url) }
-    var codeValue by remember(code) { mutableStateOf(code) }
-
+private fun ScreensCard(previews: List<ClientState>, onOpen: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(22.dp),
@@ -647,52 +719,208 @@ private fun RelayCard(
         )
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
+            Text(
+                "👁 Экраны игроков",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                "Что сейчас на сайте у каждого игрока. Листать — стрелками.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
+                onClick = onOpen,
+                enabled = previews.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (previews.isEmpty()) "Пока никого нет" else "Открыть экраны (${previews.size})")
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerActions(
+    player: PlayerView,
+    onRename: (PlayerView) -> Unit,
+    onKick: (PlayerView) -> Unit
+) {
+    IconButton(onClick = { onRename(player) }, modifier = Modifier.size(36.dp)) {
+        Text("✏️", fontSize = 15.sp)
+    }
+    IconButton(onClick = { onKick(player) }, modifier = Modifier.size(36.dp)) {
+        Text("🚪", fontSize = 15.sp)
+    }
+}
+
+@Composable
+private fun ScreensDialog(previews: List<ClientState>, onClose: () -> Unit) {
+    if (previews.isEmpty()) return
+    var index by remember { mutableStateOf(0) }
+    val safe = index.coerceIn(0, previews.lastIndex)
+    val screen = previews[safe]
+
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = {
+                        index = (safe - 1 + previews.size) % previews.size
+                    }) {
+                        Text("‹", fontSize = 30.sp)
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            screen.you.name,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1
+                        )
+                        Text(
+                            "${safe + 1} из ${previews.size} · ${screen.phaseLabel}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(onClick = {
+                        index = (safe + 1) % previews.size
+                    }) {
+                        Text("›", fontSize = 30.sp)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    item { PreviewScreen(screen) }
+                }
+                Spacer(Modifier.height(6.dp))
+                TextButton(onClick = onClose, modifier = Modifier.fillMaxWidth()) {
+                    Text("Закрыть")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewScreen(screen: ClientState) {
+    val ends = screen.phaseEndsAt
+    val remaining = ends?.let { ((it - screen.serverNow) / 1000).coerceAtLeast(0) }
+    val prompt = screen.prompt
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = Modifier.weight(1f)) {
+                DeviceIcon(screen.you.device, Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    screen.you.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (!screen.you.alive) "💀 выбыл" else "🟢 в игре",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                screen.phaseLabel,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary
+            )
+            if (remaining != null) {
+                Text(
+                    "⏳ Осталось: $remaining с",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (screen.message.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(screen.message, style = MaterialTheme.typography.bodyMedium)
+            }
+            if (screen.you.roleTitle != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "${screen.you.roleIcon ?: ""} ${screen.you.roleTitle}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.secondary
+                )
+            }
+            val priv = screen.privateMessage
+            if (!priv.isNullOrBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    shape = RoundedCornerShape(14.dp)
+                ) {
                     Text(
-                        "Игра на расстоянии",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+                        priv,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(10.dp)
                     )
+                }
+            }
+            if (prompt != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(prompt.title, style = MaterialTheme.typography.labelLarge)
+                if (prompt.targets.isNotEmpty()) {
                     Text(
-                        if (enabled) "Включено — игроки заходят через Vercel"
-                        else "Через Vercel, если все не в одной сети",
+                        prompt.targets.joinToString { it.name },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = { onChange(urlValue, codeValue, it) }
-                )
-            }
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = urlValue,
-                onValueChange = { urlValue = it.take(200) },
-                label = { Text("Адрес реле") },
-                placeholder = { Text("https://mafia-relay.vercel.app") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = codeValue,
-                onValueChange = { value ->
-                    codeValue = value.uppercase()
-                        .filter { it in 'A'..'Z' || it in '0'..'9' }
-                        .take(8)
-                },
-                label = { Text("Код комнаты") },
-                supportingText = { Text("Латинские буквы и цифры. Игроки вводят его на сайте реле") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            if (enabled) {
-                Spacer(Modifier.height(6.dp))
-                OutlinedButton(onClick = { onChange(urlValue, codeValue, true) }) {
-                    Text("Применить адрес и код")
+                if (prompt.canSkip) {
+                    Text(
+                        "можно пропустить",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
+            }
+            if (screen.events.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                screen.events.takeLast(5).forEach { line ->
+                    Text(
+                        "• $line",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            if (!screen.winner.isNullOrBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    winnerTitle(screen.winner),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.secondary
+                )
             }
         }
     }

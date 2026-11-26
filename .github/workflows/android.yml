@@ -49,23 +49,23 @@ jobs:
       - name: Collect APK
         run: |
           mkdir -p out
-          cp app/build/outputs/apk/release/app-release.apk out/Mafia-1.2.apk
+          cp app/build/outputs/apk/release/app-release.apk out/Mafia-1.3.apk
           ls -l out
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: mafia-apk
-          path: out/Mafia-1.2.apk
+          path: out/Mafia-1.3.apk
           if-no-files-found: error
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.0
-          name: Мафия 1.2
+          tag_name: v1.3.0
+          name: Мафия 1.3
           body: |
-            Мафия 1.2: чат только для мафии, кинематографичная выдача роли,
-            новые роли Сторож и Мститель, звуки ведущего на выбранных телефонах
-            и Котость, которая один раз спасает от смерти.
-          files: out/Mafia-1.2.apk
+            1.3: общий чат для всех, Котость спасает только от мафии,
+            экраны всех игроков у ведущего со стрелками, кик и переименование
+            игроков, без Vercel relay.
+          files: out/Mafia-1.3.apk
