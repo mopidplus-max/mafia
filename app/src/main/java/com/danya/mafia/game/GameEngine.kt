@@ -1740,7 +1740,7 @@ class GameEngine(
         val s = step
         val prompt = buildPrompt(viewer, now)
 
-        ClientState(
+        return ClientState(
             roomName = config.name,
             phase = phase.id,
             phaseLabel = phaseLabel(),
